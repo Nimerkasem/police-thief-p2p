@@ -194,6 +194,10 @@ async def run_peer(args: argparse.Namespace, gui_slot=None) -> int:
         )
         print("  gui            live window open")
 
+    # Both sessions up before the handshake, so neither is being established
+    # for the first time while a turn is in flight.
+    await client.open()
+
     server.start()
     orchestrator.mark_server_ready(server.url)
     orchestrator.watchdog.heartbeat()
@@ -248,6 +252,8 @@ async def run_peer(args: argparse.Namespace, gui_slot=None) -> int:
             if gui_task is not None:
                 await gui_task
         await orchestrator.shutdown("interrupt" if stop.is_set() else "normal")
+        events.emit("transport_diagnostics", **client.diagnostics())
+        await client.aclose()
         await server.stop()
         print(f"  shutdown       {orchestrator.machine.state.value}")
 

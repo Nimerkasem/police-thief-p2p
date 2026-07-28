@@ -355,44 +355,53 @@ separate email.
 
 ---
 
-## Q-20 — Two-process turn tolerance (fixed) and transport stalls (open)
+## Q-20 — Two-process transport stall
 
-**Status: PARTLY FIXED. The remaining half is a transport problem, not a
-protocol one.**
+**Status: TURN TOLERANCE FIXED. TRANSPORT STALL STILL OPEN.**
 
-**Fixed.** A peer may now be exactly one turn ahead. A commit or reveal for the
-next turn is buffered, acknowledged, and replayed into the ordinary handler once
-the local turn advances -- so ordering is unchanged and only the rejection is
-gone. Two turns ahead, stale turns, conflicting duplicates and buffer overflow
-are all still refused. Verified by 21 tests and visible in a real run
-(`future_message_buffered` then `buffered_message_processed`).
+**Fixed and kept.** The next-turn pending buffer (one turn of tolerance) works
+and is unchanged. A real anyio bug in the transport is also fixed: a FastMCP
+``Client`` is built on cancel scopes that must be entered and exited by the
+*same task*, and the old code opened a session in the startup task and tore it
+down from a turn task. anyio raised ``RuntimeError`` and -- the damaging part --
+every subsequent reopen raised too, so one blip killed a channel permanently.
+Each session now lives inside its own worker task and is never touched from
+outside it.
 
-**Still open, and the actual root cause.** `FutureTurnError` was a *symptom*.
-With buffering in place the same games now fail with `PeerTimeoutError` on the
-HTTP call itself, several turns in -- the request never completes rather than
-being rejected. Three client configurations were measured:
+**Still open, with the evidence.** Five client topologies were measured. All
+fail, and the last three fail at the *same turn*:
 
-| Configuration | Result |
+| Topology | Fails at |
 |---|---|
-| Fresh `Client` per message | fails on turn 1 |
-| Shared session, unguarded | fails around turn 3-5 |
-| **Shared session + lock** (current) | fails around turn 5-8 |
+| Fresh `Client` per message | turn 1 |
+| Shared session, unguarded | turn 3-5 |
+| Shared session + lock | turn 5-8 |
+| Two channels, shared-object sessions | turn 6 |
+| **Two channels, worker-task sessions** (current) | **turn 6, repeatably** |
 
-So a shared MCP session with serialised access is the best of the three and is
-what ships, but none survives a full game. Both peers call each other at the
-same instant during commit and reveal, and that bidirectional simultaneous
-traffic is what the transport does not tolerate.
+The consistency across unrelated client designs is the finding: this is not
+client concurrency. The captured error is
+``RuntimeError: Client failed to connect: All connection attempts failed`` --
+the opponent's **server** stops accepting new connections part-way through,
+while its process is still alive and still trying to play. The peer that cannot
+connect then retries, restarts its channel, and eventually reports the turn
+failed on a deadline.
 
-This is the same shape as Q-19 and almost certainly the same underlying fault.
-Short runs complete cleanly and audit correctly; in-process runs of the identical
-turn sequence reach 35 turns without error, so the protocol, crypto and strategy
-layers are not implicated -- it is specifically FastMCP-over-HTTP under
-concurrent bidirectional calls.
+Ruled out: turn ordering (buffer works, visible in logs); client concurrency
+(five topologies, same wall); cancellation damage to a session (reproduced in
+isolation and it recovers cleanly); the protocol, crypto and strategy layers
+(the identical turn sequence reaches 35 turns in-process).
 
-Next thing to try, not attempted here: give each direction its own transport
-(separate client sessions for outbound versus the server's replies), or move the
-turn exchange to a single round trip so the two peers are never calling each
-other at the same moment.
+Not ruled out, and where to look next: server-side session accumulation in
+FastMCP's streamable-HTTP transport. Each session opens a long-lived ``GET
+/mcp`` stream, and a peer that restarts a channel leaves the previous one
+half-open. A session table or connection limit filling would produce exactly
+this -- a server that is alive but refuses new connections. The next experiment
+is to count active sessions server-side across a game, and to test whether a
+one-way game (only one peer initiating) survives longer than a bidirectional
+one.
+
+Same underlying fault as Q-19.
 
 ---
 

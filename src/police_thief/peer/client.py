@@ -22,6 +22,7 @@ from typing import Any, Mapping
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
 
+from police_thief.peer.channel import TransportChannel
 from police_thief.peer.clock import Clock, SystemClock
 from police_thief.peer.deadline import DeadlineTracker, RetryPolicy
 from police_thief.peer.events import EventSink, NullEventSink
@@ -33,7 +34,7 @@ from police_thief.protocol.exceptions import (
     PeerUnavailableError,
     ProtocolError,
 )
-from police_thief.protocol.messages import Envelope
+from police_thief.protocol.messages import Envelope, MessageType
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,101 +75,103 @@ class PeerClient:
         self._policy = retry_policy
         self._clock = clock or SystemClock()
         self._events = events or NullEventSink()
-        self._client: Client | None = None
-        # One MCP session, one caller at a time. Both peers call each other at
-        # the same moment during commit and reveal, and overlapping requests on
-        # a shared session stall until the response deadline -- which surfaced
-        # as "opponent commitment never arrived" several turns in.
-        self._lock = asyncio.Lock()
+
+        # Two independent sessions against the same opponent server. One
+        # session may only be used by one coroutine at a time, so a single
+        # shared session means a message in flight blocks everything behind it.
+        # Splitting the turn traffic from everything else removes that
+        # head-of-line block. Each channel owns its own client and lock and
+        # never shares either.
+        self._primary = TransportChannel("primary", transport, self._events)
+        self._control = TransportChannel("control", transport, self._events)
+
+    # ------------------------------------------------------------------
+    # Channels
+    # ------------------------------------------------------------------
+
+    #: Message types that ride the primary channel -- the turn exchange, which
+    #: both peers issue simultaneously and which must not be queued behind a
+    #: liveness probe or a retry.
+    _PRIMARY_TYPES = frozenset(
+        {
+            MessageType.COMMIT,
+            MessageType.REVEAL,
+            MessageType.FINAL_REVEAL,
+        }
+    )
+
+    @property
+    def primary(self) -> TransportChannel:
+        return self._primary
+
+    @property
+    def control(self) -> TransportChannel:
+        return self._control
+
+    def channel_for(self, message_type: MessageType) -> TransportChannel:
+        """Route deterministically, so both peers agree which path is used."""
+        return (
+            self._primary
+            if message_type in self._PRIMARY_TYPES
+            else self._control
+        )
+
+    async def open(self) -> None:
+        """Establish both sessions at startup."""
+        await self._primary.open()
+        await self._control.open()
+
+    async def aclose(self) -> None:
+        """Close both sessions. Neither failure prevents the other."""
+        for channel in (self._primary, self._control):
+            try:
+                await channel.aclose()
+            except Exception:
+                pass
+
+    def diagnostics(self) -> dict[str, Any]:
+        """Per-channel counters. Carries no message content."""
+        return {
+            channel.name: {
+                "open": channel.is_open,
+                "calls": channel.calls,
+                "failures": channel.failures,
+                "restarts": channel.restarts,
+            }
+            for channel in (self._primary, self._control)
+        }
 
     # ------------------------------------------------------------------
     # Raw tool call
     # ------------------------------------------------------------------
 
-    async def _session(self) -> Client:
-        """Return a live client, connecting once and reusing it.
-
-        A fresh ``Client`` per message would open and tear down an MCP session
-        for every call (POST, GET, DELETE each time). Beyond being wasteful,
-        that serialises traffic badly when both peers call each other at the
-        same moment -- which is exactly what the commit and reveal phases do.
-        """
-        if self._client is None:
-            client = Client(self._transport)
-            await client.__aenter__()
-            self._client = client
-        return self._client
-
-    async def aclose(self) -> None:
-        """Close the persistent session, if one is open."""
-        client, self._client = self._client, None
-        if client is not None:
-            try:
-                await client.__aexit__(None, None, None)
-            except Exception:
-                # Teardown must not raise during shutdown.
-                pass
-
     async def _call_tool_once(
-        self, tool: str, arguments: Mapping[str, Any]
+        self,
+        tool: str,
+        arguments: Mapping[str, Any],
+        channel: TransportChannel | None = None,
     ) -> Any:
-        """One attempt, with no retry and no admission control.
+        """One attempt on one channel, with no retry and no admission control.
 
-        Wrapped by :meth:`_guarded` which adds both.
+        Wrapped by :meth:`_guarded`, which adds both.
         """
-        try:
-            # One persistent session, one caller at a time.
-            #
-            # Both alternatives were measured and are worse. A fresh Client per
-            # message opens and tears down an MCP session for every call and
-            # fails on turn 1. An unguarded shared session lets the commit and
-            # reveal calls -- which both peers issue at the same moment --
-            # overlap on one session, where they stall until the response
-            # deadline and surface as "opponent commitment never arrived".
-            async with self._lock:
-                client = await self._session()
-                result = await client.call_tool(tool, dict(arguments))
-        except ToolError as exc:
-            # The tool exists but refused, or does not exist. Not retryable.
-            raise InvalidResponseError(
-                f"tool {tool!r} rejected the call: {exc}"
-            ) from exc
-        except (ConnectionError, OSError) as exc:
-            await self.aclose()  # a broken session must not be reused
-            raise PeerUnavailableError(
-                f"could not reach the opponent: {type(exc).__name__}: {exc}"
-            ) from exc
-        except Exception as exc:
-            await self.aclose()
-            # httpx and anyio raise their own families; treat an unrecognised
-            # transport failure as "peer unreachable" and let the bounded retry
-            # decide, rather than crashing the peer.
-            raise PeerUnavailableError(
-                f"transport failure calling {tool!r}: "
-                f"{type(exc).__name__}: {exc}"
-            ) from exc
-
-        if getattr(result, "is_error", False):
-            raise InvalidResponseError(f"tool {tool!r} returned an error result")
-
-        data = getattr(result, "data", None)
-        if data is None:
-            data = getattr(result, "structured_content", None)
-        if not isinstance(data, dict):
-            raise InvalidResponseError(
-                f"tool {tool!r} returned {type(data).__name__}, expected an object"
-            )
-        return data
+        return await (channel or self._control).call(tool, arguments)
 
     async def _guarded(
-        self, tool: str, arguments: Mapping[str, Any], *, description: str
+        self,
+        tool: str,
+        arguments: Mapping[str, Any],
+        *,
+        description: str,
+        channel: TransportChannel | None = None,
     ) -> Any:
-        """One admitted, deadlined, bounded-retry call."""
+        """One admitted, deadlined, bounded-retry call on ``channel``."""
         tracker = DeadlineTracker(self._policy, self._clock)
+        target = channel or self._control
 
         async def attempt() -> Any:
             async with self._gatekeeper.slot():
-                return await self._call_tool_once(tool, arguments)
+                return await self._call_tool_once(tool, arguments, target)
 
         try:
             return await tracker.run(attempt, description=description)
@@ -178,6 +181,7 @@ class PeerClient:
                     self._events.emit(
                         "retry",
                         operation=description,
+                        channel=target.name,
                         attempt=record.attempt,
                         error=record.error,
                     )
@@ -194,7 +198,9 @@ class PeerClient:
         start independently with no ordering guarantee.
         """
         try:
-            data = await self._call_tool_once("health_check", {})
+            data = await self._call_tool_once(
+                "health_check", {}, self._control
+            )
         except PeerProtocolError:
             return False
         return bool(data.get("ok"))
@@ -207,16 +213,19 @@ class PeerClient:
         recognises the repeat and returns its cached reply instead of acting
         twice.
         """
+        channel = self.channel_for(envelope.message_type)
         self._events.emit(
             "outbound_message",
             message_type=envelope.message_type.value,
             message_id=envelope.message_id,
+            channel=channel.name,
         )
 
         data = await self._guarded(
             "receive_protocol_message",
             {"envelope": envelope.to_wire()},
             description=f"{envelope.message_type.value} message",
+            channel=channel,
         )
         return self._interpret(data)
 
