@@ -280,6 +280,77 @@ decision records the intended end state only.
 
 ---
 
+## D-18 — Config paths reconcile Appendix B filenames with Chapter 2 separation
+
+**Decision.** `config/police/game.json`, `config/police/game.toml`,
+`config/thief/game.json`, `config/thief/game.toml`.
+
+**Why.** Two PDF passages have to be satisfied at once. Appendix B names the
+files `config/game.json` and `config/game.toml` with no role sub-directory
+(PDF pp. 126, 130). Chapter 2 requires the two roles to run under **separate
+configuration directories**, offering `/config/thief` vs `/config/police` as an
+example (PDF p. 31, "for example"). The layout above keeps Appendix B's
+filenames and Chapter 2's mandatory separation.
+
+**Cost.** The path is not literally the PDF's. Documented here and in
+[PARAMETERS.md](PARAMETERS.md) §2 so it is never mistaken for a quotation.
+
+**Reversal condition.** An opponent or the lecturer expecting the flat
+Appendix B path. Trivial to change — it is one constant in the loader.
+
+*Added in the second-pass audit.*
+
+---
+
+## D-19 — The log record schema is defined, and the scent field is not stored
+
+**Decision.** Define an explicit log record schema
+([PROTOCOL.md](PROTOCOL.md) §11) carrying commitments, moves, hints, **LLM
+discussion fields**, nonce and hash. Do **not** store the rendered scent field
+or either peer's position history as data; the verifier recomputes both from the
+move sequence plus the config.
+
+**Why.** PDF p. 94 enumerates the mandatory log contents, and the LLM discussion
+fields are easy to overlook — the log is not a move list. The first-pass
+documentation defined the wire protocol but never the log format, even though
+the log is what the replay verifier and the mutual audit actually consume; that
+was a real gap.
+
+Not storing the scent field is the more interesting half. A live peer writes
+this file, so any global-truth field inside it would put global truth in the
+live path — exactly what E-9 forbids. Recomputation from moves costs nothing and
+keeps the boundary structural rather than procedural.
+
+**Cost.** The verifier must implement the physics to replay. It has to anyway,
+in order to check capture claims.
+
+*Added in the second-pass audit.*
+
+---
+
+## D-20 — Administrative lead-time work starts early, in parallel
+
+**Decision.** Google Cloud / OAuth account provisioning and opponent-team
+coordination move out of their code phases and begin in parallel from Phase 0,
+as `[P]` tasks.
+
+**Why.** Both have latency that is not ours to control. OAuth consent-screen
+configuration requires adding test users and can stall; finding opponent teams
+willing to negotiate a shared config and play a counting match depends on other
+people's schedules, and E-31 requires at least two such matches against
+different groups. Leaving either until its code phase risks the plan being
+blocked by something no amount of engineering fixes.
+
+This does **not** mean writing reporting code early — Phase 9 still owns that,
+per the PDF's own ordering. It means the *account* and the *relationships* exist
+before the code needs them.
+
+**Cost.** None; these are administrative tasks with no code dependency.
+
+*Added in the second-pass audit.*
+
+---
+
 ## D-17 — One test per mandatory rule, named by rule ID
 
 **Decision.** Test functions carry the rule ID, e.g.

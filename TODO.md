@@ -21,6 +21,17 @@ Live task list. The full phased breakdown with exit criteria is in
 - [x] Compliance audit of the documentation against the PDF
 - [x] `.gitignore` covering every secret named in the specification
 - [x] Initial documentation commit
+- [x] **Second-pass audit against the rendered PDF pages** (not text extraction):
+      all 55 rules and all 32 parameters re-verified visually; three gaps found
+      and fixed (transition-function agreement, binding field names, log record
+      schema)
+
+## Start now — external latency, runs in parallel (D-20)
+
+- [ ] Provision Google Cloud project + OAuth consent screen (`gmail.send` scope,
+      test users). Account setup only; reporting code stays in Phase 9.
+- [ ] Begin opponent-team coordination — two counting matches against different
+      groups are mandatory and depend on other people's schedules.
 
 ## Next — Phase 0, project skeleton
 

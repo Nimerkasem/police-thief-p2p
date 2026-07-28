@@ -38,6 +38,21 @@ rationale is sound, with two deviations noted at Phase 4 and Phase 6.
 - [ ] `[M]` `tests/` skeleton with the rule-ID naming convention (D-17).
 - [x] `[P]` `PLAN.md` and `TODO.md` at repo root (E-50).
 - [ ] `[P]` `docs/prd/` with seven PRD stubs, one per development stage (E-50).
+- [ ] `[M]` Config loader treats the key set as a **closed schema** — rejects
+      unknown or renamed keys. Field names are fixed and binding (PDF p. 130);
+      a silently-ignored key is how two peers end up computing different physics
+      while both believe they agreed.
+
+**Starts now, runs in parallel with every phase** (D-20 — these have external
+latency that engineering cannot compress):
+
+- [ ] `[P]` Provision the Google Cloud project and OAuth consent screen: enable
+      Gmail API, add test users, scope `gmail.send` only. Account setup only —
+      the reporting code stays in Phase 9. Consent-screen approval can stall.
+- [ ] `[P]` Begin opponent-team coordination. E-31 needs ≥2 counting matches
+      against **different** groups, each requiring a negotiated shared config;
+      this depends on other people's schedules. Start the conversations before
+      the code is ready, not after.
 
 **Exit:** `pytest` runs green on config load/validate.
 **Tests:** E-12 (parametrised over every MINIMUM and FIXED parameter), canonical
@@ -84,7 +99,10 @@ localhost; natural language and crypto come later.*
       transitions **without mutating state** (E-4, E-5).
 - [ ] `[M]` `orchestrator.py` — single gateway; constructs and coordinates the
       five sub-systems; holds no decision logic and no low-level I/O (E-3).
-- [ ] `[M]` `audit/log.py` — append-only JSONL writer (D-15).
+- [ ] `[M]` `audit/log.py` — append-only JSONL writer (D-15) against the record
+      schema in [PROTOCOL.md](docs/PROTOCOL.md) §11, including the **LLM
+      discussion fields** required by PDF p. 94. The scent field is never
+      stored — the verifier recomputes it (D-19).
 - [ ] `[M]` `__main__.py` — `peer --role police|thief`.
 - [ ] `[M]` Two-process launch under separate config directories (E-1, E-2).
 - [ ] `[M]` Idempotency: duplicate suppression keyed on

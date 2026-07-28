@@ -297,6 +297,18 @@ tree.
 At end of match: Final Reveal of all nonces → mutual audit (E-36) → agree result
 → each side independently emails its own `[result_file]` (E-35).
 
+**What the log must carry.** PDF p. 94 enumerates the log's mandatory contents:
+commit-reveal commitments, moves, hints, **the LLM discussion fields**, the nonce
+and the hash. The full record schema, and the argument that it is sufficient for
+an independent third party to replay and verify the match from the file alone,
+is in [PROTOCOL.md](PROTOCOL.md) §11.
+
+Note one deliberate omission from that schema: **the scent field is never
+stored**, only recomputed from the move sequence plus the config. Storing a
+rendered global scent field in a file the live peer writes would put global
+truth inside the live path, which is precisely what E-9 forbids. Recomputation
+costs nothing and keeps the boundary intact.
+
 ---
 
 ## 7. Configuration and its hash
@@ -304,14 +316,31 @@ At end of match: Final Reveal of all nonces → mutual audit (E-36) → agree re
 Two files per peer, per [PARAMETERS.md](PARAMETERS.md):
 
 - `config/<role>/game.json` — the **shared signed constitution**. Loaded
-  byte-identically on both sides. Its SHA-256 is exchanged before the match;
-  **any mismatch means refusing to play** (E-11).
+  byte-identically on both sides. Its SHA-256 (`config_sha256`, the PDF's own
+  field name) is exchanged before the match; **any mismatch means refusing to
+  play** (E-11). It is **both hashed and cryptographically signed** — Appendix B
+  requires the signature, Appendix F §2 requires the cryptographic lock.
 - `config/<role>/game.toml` — **private, local, never on the wire, never
   signed**. Network port, opponent URL, strategy class, LLM mode, email target,
   group identity.
 
+**On the paths.** Appendix B names these `config/game.json` and
+`config/game.toml` with no role sub-directory (PDF pp. 126, 130); Chapter 2
+(PDF p. 31) mandates separate config *directories* per role and offers
+`/config/thief` vs `/config/police` as an example. The `config/<role>/` layout
+above reconciles both and is our choice, not the PDF's wording — see
+[DECISIONS.md](DECISIONS.md) D-18.
+
 JSON values **override** TOML values for the same key, so the private file can
-never weaken a signed condition.
+never weaken a signed condition. This is stated directly at PDF p. 132:
+*"when `config/game.json` exists, the match-condition values in it override
+every parallel key in the TOML — so the private file can never 'weaken' a signed
+condition."*
+
+**Field names are a closed schema.** Values may move by negotiation; **key names
+are fixed and binding** (PDF p. 130). The loader rejects unknown or renamed
+keys rather than ignoring them, since a silently-ignored key is how two peers
+end up computing different physics while both believing they agreed.
 
 **Config loading is the one place numeric constants enter the system.** Game
 logic reads from a typed config object; no numeric literal from the PDF appears

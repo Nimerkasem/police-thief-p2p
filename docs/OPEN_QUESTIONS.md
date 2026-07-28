@@ -17,15 +17,36 @@ Two things this freedom does **not** cover:
   rather than silently resolved.
 
 Status key: **RESOLVED** (settled by source priority; recorded in
-[DECISIONS.md](DECISIONS.md)) · **NEGOTIATE** (must be agreed with the opponent
-team before a match) · **ESCALATE** (needs the lecturer, or a decision the user
-must make).
+[DECISIONS.md](DECISIONS.md)) · **CONTRADICTORY** (the PDF says two incompatible
+things) · **NEGOTIATE** (must be agreed with the opponent team before a match) ·
+**ESCALATE** (needs the lecturer, or a decision the user must make).
+
+> **Second-pass audit (2026-07-28).** Re-verified against the PDF pages
+> themselves rather than a text extraction. Three entries moved: **Q-1** and
+> **Q-4** are resolved by the PDF's own narrative rather than only by our source
+> priority; **Q-7** is resolved on two independent grounds and no longer needs
+> escalation. **Q-12 remains the sole item requiring outside input.** Details in
+> each entry and in [COMPLIANCE_AUDIT.md](COMPLIANCE_AUDIT.md) Part 1.
 
 ---
 
 ## Q-1 — `num_games`: Appendix F says 6 FIXED, the example config ships 1
 
-**Status: RESOLVED** → see [DECISIONS.md](DECISIONS.md) D-2.
+**Status: CONTRADICTORY — but resolved by the PDF itself.**
+→ see [DECISIONS.md](DECISIONS.md) D-2.
+
+**Second-pass finding: the PDF resolves the usage question in its own words.**
+PDF p. 130 (verified against the rendered page) states that 1 is *"a single
+demonstration sub-game"* and that *"the full league series requires
+`[num_sub_games]` sub-games"*. So the document tells us plainly what to run in a
+league match: 6. The residual inconsistency is only in the *status label* — a
+value cannot literally be FIXED at 6 while the shipped example carries 1 — but
+that inconsistency has no operational consequence once the narrative is read.
+
+Downgraded from "unresolved contradiction" to "contradictory labelling, resolved
+usage". The competing interpretations were: (a) 6 always, since FIXED admits no
+variation; (b) 1 is a legitimate configurable default. Reading (b) is excluded
+for league play by the p. 130 sentence itself.
 
 - Appendix F table 18 row 1 (PDF p. 154): `[num_sub_games]` = **6**, status
   **FIXED** ("deviation disqualifies the team").
@@ -105,14 +126,25 @@ Three different accounts appear in the PDF:
 Account 3 is self-declared illustrative. Accounts 1 and 2 differ, with 2 being
 the explicit description of practice.
 
+**Second-pass finding: the PDF resolves the field *set*, not the field *names*.**
+Account 2 is not a vague hint — it is an explicit statement of what the
+implementation seals, and account 3 is explicitly self-labelled as simplified.
+So the document does tell us the record contains: state, move, intent, nonce,
+hint, intent classification, step number, role (and `sub_game` per the sample
+code comment). What the PDF never fixes is the exact JSON **key spelling and
+nesting**, which canonical serialisation makes load-bearing — `"sub_game"` and
+`"subGame"` hash differently.
+
 **Resolution:** implement the richer record with canonical JSON serialisation
 (the schema in [PROTOCOL.md](PROTOCOL.md) §6.1). This satisfies E-17 (SHA-256
 commit-reveal) and E-18 regardless of field set, and honours the explicit
 "byte-identical input" requirement.
 
-**Must be negotiated:** both peers must hash the *same* schema or every audit
-fails. The sealed-record schema is therefore included in the pre-match
-agreement and its hash exchanged at handshake.
+**Still must be negotiated:** both peers must hash the *same* key spelling or
+every audit fails and both sides take a technical loss for a formatting
+disagreement. The sealed-record schema is therefore part of the pre-match
+agreement and its hash is exchanged at handshake. Reclassified from AMBIGUOUS to
+**resolved in substance, negotiate the encoding**.
 
 ---
 
@@ -175,8 +207,19 @@ A draft is not received by the lecturer.
 is retained as a development/testing convenience only, and the reporting module
 refuses to run in `draft` mode when the match is flagged as counting.
 
-**Escalate if convenient:** worth a one-line confirmation from the lecturer that
-drafts are not accepted, but the rule text is clear enough to act on.
+**Second-pass finding — the PDF resolves this, on two independent grounds.**
+
+1. **Appendix D p. 141 states the precedence rule explicitly:** *"the repository
+   licence is an educational-use licence… **wherever the repository deviates
+   from the book, the book and the mandatory parameter table prevail**."* The
+   draft-sending behaviour is a property of the reference repository
+   (described at PDF p. 139), so it is subordinate by the PDF's own rule.
+2. **The TOML skeleton is labelled an example.** PDF p. 130 introduces it as
+   *"an abbreviated skeleton"* (שלד מקוצר), and PDF p. 4 makes examples
+   non-binding. A mandatory rule (E-32, E-51) outranks an example value.
+
+Reclassified from AMBIGUOUS to **CONTRADICTORY — resolved by the PDF**. The
+escalation is no longer needed; the document answers it.
 
 ---
 

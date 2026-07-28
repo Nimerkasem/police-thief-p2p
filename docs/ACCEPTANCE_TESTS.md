@@ -43,6 +43,8 @@ written against, and the source for `tests/` in Phase 0 onward.
 |---|---|---|---|
 | E-11 | Config identical byte-for-byte on both sides | `AUTO` | `test_e11_config_hash_matches` — canonical-hash the same file loaded twice, assert equal. `test_e11_refuses_play_on_mismatch` — handshake with a peer whose `config_sha256` differs by one byte; assert `ERR_CONFIG_MISMATCH` and that **no sub-game starts**. |
 | E-12 | Raise minimums only by agreement; never lower | `AUTO` | `test_e12_rejects_lowered_minimum` — parametrised over every MINIMUM parameter; load a config with the value one below the table and assert the validator rejects it. `test_e12_accepts_raised_minimum` — assert a raised value loads. `test_e12_rejects_altered_fixed` — parametrised over every FIXED parameter; assert any change is rejected. |
+| — | Field names are a closed schema (PDF p. 130) | `AUTO` | `test_config_rejects_renamed_key` — rename `grid_size` to `gridSize`; assert the loader **rejects** rather than defaulting. `test_config_rejects_unknown_key` — assert an extra key is rejected, not ignored. |
+| — | Both sides agree the same transition function (PDF p. 21) | `AUTO` | `test_transition_function_derives_only_from_shared_config` — assert the physics engine reads every rule from the shared config object and holds no private movement state, so equal configs imply identical transitions. |
 | E-13 | Move only orthogonally | `AUTO` | `test_e13_accepts_orthogonal_and_stay` — assert all of `move_set` are legal from an interior cell. |
 | E-14 | No diagonal moves | `AUTO` | `test_e14_rejects_diagonal_move` — submit a diagonal in `reveal`; assert `ERR_ILLEGAL_MOVE` and that the board state is unchanged. |
 | E-15 | Declare every barrier placement openly | `AUTO` | `test_e15_barrier_appears_in_reveal_and_log` — place a barrier; assert the reveal payload carries the exact cell and the log records it. `test_e15_rejects_undeclared_barrier` — assert a board diff showing an undeclared barrier is rejected at audit. |
@@ -70,6 +72,10 @@ written against, and the source for `tests/` in Phase 0 onward.
 | E-24 | Cryptographic hardware declaration pre-match | `AUTO` | `test_e24_step_zero_precedes_step_one` — assert no `commit` is accepted before both `declare` messages. `test_e24_declaration_sealed` — assert the declaration hash is stable and recorded. |
 | E-53 | Step-0 records the commit hash played | `AUTO` | `test_e53_declaration_carries_commit_hash` — assert `github_commit` is present, non-empty, and hex; assert it also lands in `[declaration_file]` and `[result_file]`. |
 | — | Canonical serialisation is byte-identical | `AUTO` | `test_canonical_json_is_key_order_independent` — build the same record with keys in different insertion orders; assert identical bytes and identical hash. |
+| — | Log carries every mandatory field (PDF p. 94) | `AUTO` | `test_log_record_schema` — assert each step record carries commitment, move, hint, **LLM discussion fields**, nonce slot and hash; assert `llm.tokens_in/out` present even in `template` mode (0, not absent). |
+| — | Log is sufficient for independent replay | `AUTO` | `test_log_alone_reconstructs_match` — hand the verifier only the log + config; assert it re-derives both trajectories, the barrier set, the scent field and the outcome, with no field supplying a position directly. |
+| — | Live log contains no nonce | `AUTO` | `test_live_log_nonce_null_until_final_reveal` — assert every `nonce` is null in the live JSONL and populated only after `final_reveal` (E-18). |
+| — | Scent field is never persisted | `AUTO` | `test_log_has_no_scent_field` — assert no rendered scent grid appears anywhere in the sealed log (D-19: storing it would put global truth in the live path). |
 
 ---
 

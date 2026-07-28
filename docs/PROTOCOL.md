@@ -94,6 +94,12 @@ produce a false mismatch, and no semantic difference can produce a false match.
 config_sha256 = SHA256( canonical_json(config/game.json) )
 ```
 
+`config_sha256` is **the PDF's own field name** (Appendix B, PDF p. 127), not a
+name we coined. Appendix B also requires the shared file to be *locked with a
+cryptographic signature* (PDF p. 126) and Appendix F §2 to be *locked
+cryptographically* (PDF p. 156) — so the shared config is **both hashed and
+signed**, not one or the other.
+
 ### `hello` — handshake and config agreement
 
 Request:
@@ -522,3 +528,82 @@ Sequence at completion of a **match** (all `num_games` sub-games):
    match for **both**.
 6. The encounter against that opponent is **sealed** — no further counting match
    against them (E-52).
+
+---
+
+## 11. Log record schema
+
+*Added in the second-pass audit. Previously this document defined the wire
+protocol but never the log format, even though the log — not the wire — is what
+the replay verifier and the mutual audit actually consume.*
+
+PDF p. 94 enumerates what `[log_file]` must contain: **commit-reveal
+commitments, moves, hints, the LLM discussion fields, the nonce and the hash**,
+with the stated purpose *"to enable full cryptographic verification in the
+replay simulator"*. The LLM discussion fields are an explicit requirement and
+the item most likely to be forgotten — the log is not merely a move list.
+
+**Live format:** append-only JSON Lines, one object per protocol event, written
+before the corresponding network call returns.
+**Sealed format:** at end of sub-game, converted to the canonical
+`log_<game_id>_g<NN>.json` — an object carrying the match metadata and an
+ordered array of step records.
+
+```jsonc
+{
+  "game_id": "…", "sub_game": 1, "game_uid": "…",
+  "config_sha256": "…", "scent_model_sha256": "…",
+  "declarations": { "police": { … }, "thief": { … } },   // step-zero, both sides
+  "steps": [
+    {
+      "step": 7,
+      "role": "police",
+      "phase_trace": ["COMMITTING", "AWAITING_REVEAL", "VERIFYING"],
+      "h_commit": "9c1f…",          // the commitment as sent live
+      "state":    "…",              // hash of pre-move local state
+      "move":     "N",              // or {"action":"barrier","cell":[r,c]}
+      "hint":     "…",              // exact revealed hint text
+      "intent":   "truth",          // "truth" | "lie"
+      "nonce":    "…",              // populated at final reveal ONLY
+      "llm": {                      // PDF p. 94: "the LLM discussion fields"
+        "provider":        "template",
+        "invoked":         false,
+        "prompt":          null,
+        "response":        null,
+        "tokens_in":       0,
+        "tokens_out":      0,
+        "classification":  "lie"    // our read of the OPPONENT's last hint
+      },
+      "belief_top":  [[3,4], 0.06], // argmax cell and its probability
+      "ts_sent":     "…", "ts_recv": "…"
+    }
+  ],
+  "outcome": { "type": "capture", "police": 20, "thief": 5 },
+  "tokens_total": 0
+}
+```
+
+**Independent-replay sufficiency.** A third party holding only this file must be
+able to re-derive everything and check it. The schema satisfies that:
+
+| Needed to replay | Supplied by |
+|---|---|
+| The physics | `config_sha256` + the committed `config_<game_id>_g<NN>.json` |
+| The scent model | `scent_model_sha256` + the same config |
+| Start positions | config (`thief_start`, `cop_start`) |
+| Every move, in order | `steps[].move`, `steps[].step`, `steps[].role` |
+| Barrier placements | `steps[].move` when it is a barrier action |
+| Hash verification | `h_commit` + `state` + `move` + `hint` + `intent` + `nonce` — the full sealed record of §6.1 |
+| Scent field at any turn | Recomputed from moves + config; not stored, and must not be, since storing it would embed global truth in a live-written file |
+| Outcome and scoring | `outcome` + config scoring block |
+| Token accounting (E-54) | `steps[].llm.tokens_*` + `tokens_total` |
+
+Two constraints on this schema follow from the local-truth rules:
+
+- **`nonce` is null in the live log** and populated only at final reveal
+  (E-18). A live log containing nonces would break the commitment scheme.
+- **No opponent position is ever written by the live peer.** The verifier
+  *derives* both trajectories from the two logs' moves plus the config; it does
+  not read them from a field, because no such field exists. This is what keeps
+  the log honest with E-9 while still being sufficient for replay.
+

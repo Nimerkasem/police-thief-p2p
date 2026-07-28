@@ -152,6 +152,14 @@ longer. `MANDATORY` (E-6, E-7).
   themselves, each in its turn, according to a pre-agreed configuration file
   (`config/game.json`) shared byte-identically. There is **no external judge**.
   `MANDATORY`, PDF p. 34.
+- **Both sides must agree on the same transition function.** Chapter 1
+  (PDF p. 21), describing the `P` component of the Dec-POMDP octuple, states:
+  *"since there is no central server, both sides must agree on that same
+  transition function — it is encoded in the shared configuration file."*
+  `MANDATORY`. This is the formal statement of what E-11 enforces
+  mechanically, and it is why the config hash is a precondition for play rather
+  than a nicety: an identical config **is** an identical physics engine.
+  *(Added in the second-pass audit — previously implied by E-11 but not stated.)*
 - The contract is set by **negotiation** between each pair of teams and may
   therefore differ from pair to pair. It **must** be mutually agreed. It **must
   not weaken or dilute** the instructions defined in the book: *the agreed
@@ -570,7 +578,7 @@ of each is defined in Appendix F table 20 (PDF p. 157):
 |---|---|---|
 | `[declaration_file]` | `declaration_<game_id>.json` | **Pre-match declaration.** Concentrates all *constant* data of the whole match (across all sub-games): identity of both teams and their members, cop and thief repository addresses, MCP server addresses, hardware specs, language model, agreed token ceiling, and match start/end times. Role: to fix, cryptographically signed, everything that does not change during the match. |
 | `[config_file]` | `config_<game_id>_g<NN>.json` | **The agreed configuration.** All quantitative parameters of the sub-game (Appendix F), cryptographically locked and identical between the sides. Role: to define the physics and scoring rules both teams agreed on. |
-| `[log_file]` | `log_<game_id>_g<NN>.json` | **The sub-game log.** A step-by-step record: commit-reveal commitments, moves, hints and the LLM discussion fields, alongside the nonce and hash. Role: to enable full cryptographic verification in the replay simulator. |
+| `[log_file]` | `log_<game_id>_g<NN>.json` | **The sub-game log.** A step-by-step record: commit-reveal commitments, moves, hints **and the LLM discussion fields**, alongside the nonce and hash. Role: to enable full cryptographic verification in the replay simulator. |
 | `[result_file]` | `result_<game_id>.json` | **The final results report.** Summary across all sub-games: each team's score in each sub-game and the cumulative result, for the lecturer to weight the league score. This is the binding report emailed to `[agent_reporting_address]`. |
 
 All four carry a shared identifier (`game_uid`) and each filename derives from
@@ -578,6 +586,23 @@ the match identifier (`game_id`) and the sub-game number (`<NN>`), so files from
 different matches never get mixed up. **Mandatory fields in the report** include
 the GitHub links of **both** teams, the commit identifier of each sub-game, and
 the total tokens consumed. `MANDATORY`.
+
+**Mandatory log content (PDF p. 94).** The log file's stated purpose is *"to
+enable full cryptographic verification in the replay simulator"*, and its
+contents are enumerated as: commit-reveal commitments, moves, hints, **the LLM
+discussion fields**, the nonce, and the hash. The LLM discussion fields are an
+explicit content requirement that is easy to overlook — the log is not merely a
+move list. The concrete record schema is defined in
+[PROTOCOL.md](PROTOCOL.md) §11. `MANDATORY`.
+*(Made explicit in the second-pass audit.)*
+
+**Field names are fixed and binding (PDF p. 130).** Appendix B states, of the
+shared config: *"the key fields correspond one-to-one to the mandatory parameter
+table… **every field value** may change by negotiation (in the stricter
+direction only, for a parameter of type 'minimum'), **but the field names are
+fixed and binding**."* So negotiation may alter values; it may **never** rename
+or restructure keys. `MANDATORY`.
+*(Added in the second-pass audit.)*
 
 **Mandatory rules from Appendix F §2 (PDF p. 156).**
 

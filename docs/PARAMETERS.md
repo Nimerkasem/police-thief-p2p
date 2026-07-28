@@ -3,6 +3,13 @@
 Source: `police_thief_p2p.pdf`, **Appendix F** (PDF pp. 151–159 = book
 pp. 135–143). `PDF page = book page + 16`.
 
+> **Verification.** Every table below was re-verified in a second pass by
+> rendering PDF pages 152–155 to images and reading them visually, rather than
+> by text extraction. This matters: the PDF is right-to-left, and text
+> extraction returns table cells out of order, which is exactly where a wrong
+> value or a wrong status would hide. All 32 values, all statuses, all units and
+> all parameter names below are confirmed against the rendered pages.
+
 > Appendix F is **the single source of truth for every quantitative value in the
 > project.** Throughout the book, numeric values do not appear as "hard" numbers
 > in the body text but as an intuitive Hebrew **code-name enclosed in square
@@ -30,8 +37,23 @@ are binding defaults. Precisely:
 | Status | Hebrew | Binding meaning (PDF p. 155) |
 |---|---|---|
 | **MINIMUM** | מינימום | The sides may negotiate the value, **but only in the direction that makes the game harder** (usually increasing it) — never an easement below the tabulated value. **In the absence of an explicit agreed definition between the sides, the code must ensure the tabulated value is the default the team uses.** |
-| **FIXED** | קבוע | A binding value that **cannot be changed at all**. Deviating from this value **disqualifies the team**. |
+| **FIXED** | קבוע | A binding value that **cannot be changed at all**. Deviating from this value **disqualifies the team**. (The PDF bolds this sanction.) |
 | **NEGOTIABLE** | משא ומתן | The sides may agree on **any** value. **In the absence of an explicit agreed definition between the sides, the code must ensure the tabulated value is the default the team uses.** |
+
+**These are the only three statuses in the document.** Verified page by page
+against the rendered tables in the second-pass audit. The PDF's own wording is
+*"the status column in the tables above receives one of **three** values"*
+(PDF p. 155). There is **no** `DEFAULT` status and **no** `OPTIONAL` status
+anywhere in Appendix F; any such label appearing in project documentation would
+be invented. `NEGOTIABLE` is the closest thing to "default" — and note that under
+all three statuses the tabulated value functions as the code's default.
+
+**Field names are fixed and binding (PDF p. 130).** Distinct from the value
+statuses, and easy to miss: *"every field value may change by negotiation (in
+the stricter direction only, for a parameter of type 'minimum'), **but the field
+names are fixed and binding**."* Negotiation may change what a value is; it may
+never rename a key or restructure the object. The config loader must therefore
+treat the key set as a closed schema and reject unknown or renamed keys.
 
 **Consequence for implementation.** For all three statuses the tabulated value is
 the code's default. Therefore:
@@ -56,6 +78,26 @@ decision test the PDF gives (PDF p. 128) is:
 |---|---|---|---|---|
 | `config/game.json` | **JSON** | The **shared constitution**: agreed match conditions, identical byte-for-byte on both sides | **Yes**, cryptographically locked | Yes — exchanged and hashed |
 | `config/game.toml` | **TOML** | **Private, local** per-peer settings only | No | **No** |
+
+**On the exact paths.** Appendix B names the files `config/game.json` and
+`config/game.toml` (PDF pp. 126, 130) — with no role sub-directory. Separately,
+Chapter 2 (PDF p. 31) requires the two roles to run *"under separate
+configuration directories — **for example** `/config/thief` versus
+`/config/police`"*. The word is "for example"; the *separation* is mandatory,
+the specific paths are not. This repository reconciles the two as
+`config/police/game.json` and `config/thief/game.json`, preserving both the
+Appendix B filenames and the Chapter 2 separation. That reconciliation is our
+choice, not the PDF's wording — recorded as [DECISIONS.md](DECISIONS.md) D-18.
+
+**Signed, hashed, or both? Both.** Appendix B is explicit on each:
+*"loaded byte-identically at both ends and **locked with a cryptographic
+signature**"* (PDF p. 126), and JSON was chosen because it is
+*"canonically serialisable (sorted keys) and therefore suited to byte-for-byte
+identity, to a consistent hash (**`config_sha256`**), to cryptographic signature,
+and to exchange between machines and between teams"* (PDF p. 127). Appendix F §2
+adds *"verify these values are identical between the two teams, and **lock them
+cryptographically**"* (PDF p. 156). `config_sha256` is therefore **the PDF's own
+field name**, not one we coined.
 
 Why JSON for the shared file (PDF p. 127): it is an unambiguous, cross-language
 standard, **canonically serialisable** (sorted keys), and therefore suited to
@@ -178,11 +220,19 @@ a match against one opponent consists of `num_games = 6` sub-games; you must pla
 at least `2` matches against different groups and at most `10` matches.
 
 Appendix F says `num_games` is `6` and **FIXED**. The Appendix B example config
-(PDF p. 129) ships `"num_games": 1`, and its accompanying text (PDF p. 130)
-says: *"the `num_games` field is sent by default with the value 1 (a single
-example sub-game); the full league series requires `[num_sub_games]` sub-games."*
-This is a real contradiction in the shipped default. **Appendix F prevails: 6.**
-See [OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) Q-1 and
+(PDF p. 129) ships `"num_games": 1`, and its accompanying text (PDF p. 130) —
+verified verbatim against the rendered page in the second-pass audit — says:
+*"the `num_games` field is sent by default with the value 1 (a single example
+sub-game); the full league series requires `[num_sub_games]` sub-games."*
+
+**The PDF resolves the usage question itself.** That sentence states directly
+that 1 is a single demonstration sub-game and that a full league series requires
+`[num_sub_games]` = 6. So there is no ambiguity about what to run in a league
+match. What remains inconsistent is only the *status label*: a value cannot
+literally be FIXED at 6 while the shipped example carries 1. Since Appendix F is
+the binding source and its narrative agrees, **6 is used for every counting
+match**; 1 is a demo convenience with no league standing. See
+[OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) Q-1 and
 [DECISIONS.md](DECISIONS.md) D-2.
 
 Note also that `token_budget_per_series` is tabulated with a tilde (`~200000`),
