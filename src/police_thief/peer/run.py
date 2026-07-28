@@ -267,9 +267,9 @@ async def _play_turns(orchestrator, args) -> int:
         for turn in range(1, args.turns + 1):
             # No action passed: the peer's own strategy chooses, from its own
             # belief and the opponent's scent. Nothing else is available to it.
-            opponent_action = await orchestrator.play_turn(
-                turn, hint="moving along", intent="truth"
-            )
+            # No hint passed: the peer's own verbal layer composes one, and
+            # decides for itself whether this turn's is truthful.
+            opponent_action = await orchestrator.play_turn(turn)
             crypto_turn = orchestrator.crypto.completed_turns[turn]
             commitment = crypto_turn.local_commitment
             print(

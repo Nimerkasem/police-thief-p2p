@@ -50,6 +50,7 @@ from police_thief.domain.state import LocalState
 from police_thief.domain.transition import apply_action, observe_barrier
 from police_thief.protocol.action_codec import decode_action, encode_action
 from police_thief.strategy.heuristics import strategy_for
+from police_thief.strategy.verbal import HintRequest, default_provider
 from police_thief.strategy.tracker import OpponentTracker
 from police_thief.peer.clock import Clock, SystemClock
 from police_thief.peer.client import PeerClient
@@ -150,6 +151,7 @@ class PeerOrchestrator:
             role=self.role, config=self.shared, board=self.state.board
         )
         self.strategy = strategy_for(self.role.value)
+        self.hints = default_provider()
         self.latest_opponent_hint: str = ""
         self.latest_opponent_intent: str = ""
         """The last hint the opponent revealed, and the intent it declared.
@@ -455,6 +457,21 @@ class PeerOrchestrator:
         if action is None:
             action = self.choose_action()
 
+        if not hint:
+            # The verbal layer runs *after* the move is decided and cannot
+            # change it. It only describes -- truthfully or not.
+            composed = self.hints.compose(
+                HintRequest(
+                    game_id=self.game_id,
+                    role=self.role.value,
+                    turn=turn,
+                    actual_direction=getattr(action, "direction", None),
+                    map_area=self.shared.world.map_area,
+                    max_words=self.shared.world.hint_max_words,
+                )
+            )
+            hint, intent = composed.text, composed.intent
+
         # 1. Seal privately. The nonce is created here and never leaves.
         state_hash = local_state_hash(self.state.to_public_dict())
         commitment = self.crypto.seal(
@@ -563,6 +580,13 @@ class PeerOrchestrator:
             self.tracker.observe_barrier(action.cell)
         self.tracker.observe_opponent_action(
             opponent_action, own_cell=self.state.position
+        )
+        # What they said, weighed against what the trail shows. Scent cannot be
+        # forged, so a claim it contradicts costs the speaker trust instead of
+        # moving our belief.
+        self.tracker.note_hint(
+            self.hints.interpret(self.latest_opponent_hint),
+            own_cell=self.state.position,
         )
         if isinstance(opponent_action, PlaceBarrier):
             self.state = observe_barrier(self.state, opponent_action.cell)

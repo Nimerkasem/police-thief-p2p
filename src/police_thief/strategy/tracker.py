@@ -29,7 +29,7 @@ from police_thief.domain.actions import Action, Move, PlaceBarrier
 from police_thief.domain.belief import BeliefMap
 from police_thief.domain.board import Board
 from police_thief.domain.coordinates import Coordinate
-from police_thief.domain.enums import Role
+from police_thief.domain.enums import Direction, Role
 from police_thief.domain.scent import ScentField
 from police_thief.domain.state import LocalState
 from police_thief.strategy.base import LocalView
@@ -49,6 +49,16 @@ class OpponentTracker:
     belief: BeliefMap = field(init=False)
     opponent_scent: ScentField = field(init=False)
     recent_cells: list[Coordinate] = field(default_factory=list)
+    hint_reliability: float = 0.5
+    """How much this opponent's hints have been worth so far, 0..1.
+
+    Starts at even odds and moves with the evidence. Scent cannot be forged, so
+    it is the yardstick: a hint that agrees with the trail earns trust, one that
+    contradicts it loses trust. A peer that lies consistently therefore ends up
+    with hints that barely move our belief -- which is the cost of lying.
+    """
+    hints_seen: int = 0
+    hints_contradicted: int = 0
     _believed_cell: Coordinate | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
@@ -108,6 +118,60 @@ class OpponentTracker:
         self.belief.exclude_impossible(disproven={own_cell})
 
     # ------------------------------------------------------------------
+
+    def note_hint(self, reading, own_cell: Coordinate) -> None:
+        """Fold an incoming hint into the belief, weighted by earned trust.
+
+        The claim is checked against the scent first. Chapter 4's worked example
+        is exactly this: a thief announcing it went north while the whole trail
+        sits in the south-east has given itself away, because the environment
+        does not lie. So a contradicted hint both lowers trust *and* is not
+        allowed to move the belief.
+        """
+        direction = getattr(reading, "claimed_direction", None)
+        clarity = float(getattr(reading, "confidence", 0.0) or 0.0)
+        if direction is None or clarity <= 0.0:
+            return
+
+        self.hints_seen += 1
+        supported = self._scent_supports(direction)
+
+        if supported:
+            self.hint_reliability = min(1.0, self.hint_reliability + 0.1)
+        else:
+            self.hints_contradicted += 1
+            self.hint_reliability = max(0.0, self.hint_reliability - 0.2)
+            # Contradicted by evidence that cannot be faked: believe the trail.
+            return
+
+        weight = clarity * self.hint_reliability
+        if weight <= 0.0:
+            return
+
+        shifted: dict[Coordinate, float] = {}
+        for cell, mass in self.belief.probabilities.items():
+            target = cell.shifted(direction)
+            if self.board.is_passable(target):
+                shifted[target] = shifted.get(target, 0.0) + mass * weight
+            shifted[cell] = shifted.get(cell, 0.0) + mass * (1.0 - weight)
+
+        self.belief.probabilities = shifted
+        self.belief.exclude_impossible(disproven={own_cell})
+
+    def _scent_supports(self, direction: Direction) -> bool:
+        """Does the sensed trail point the way the hint claims?
+
+        With no trail yet there is nothing to contradict, so a claim is taken at
+        face value.
+        """
+        peak = self.opponent_scent.peak()
+        if peak is None or self._believed_cell is None:
+            return True
+        scent_cell, _ = peak
+        expected = self._believed_cell.shifted(direction)
+        return expected.manhattan_distance_to(
+            scent_cell
+        ) <= self._believed_cell.manhattan_distance_to(scent_cell)
 
     def view(self, state: LocalState) -> LocalView:
         """Bundle the legal evidence for the strategy."""

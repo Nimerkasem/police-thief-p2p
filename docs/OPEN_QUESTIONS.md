@@ -355,6 +355,26 @@ separate email.
 
 ---
 
+## Q-20 — Two-process turn-synchronisation race
+
+**Status: KNOWN LIMITATION (ours).** *Surfaced in Phase 8.*
+
+In a real two-process run, one peer can start turn N+1 while the other is still
+finishing turn N, and the early commit is refused with `FutureTurnError`. It
+shows up from about turn 3 and is timing-sensitive -- short runs complete
+cleanly, longer ones do not.
+
+Not caused by the hint layer: the same turn sequence runs to 8 turns in-process
+without error, and the hints, intents and trust updates are all correct there.
+The peers are genuinely simultaneous, so one being a beat ahead is normal and
+the receiver should buffer an early commit rather than reject it. That is a
+receiver-side tolerance change, not a change to commit-reveal semantics, and it
+is deliberately not being made under time pressure at the end of a phase.
+
+Related to Q-19, which is the same shape of problem under `--gui`.
+
+---
+
 ## Q-19 — Long `--gui` runs destabilise the FastMCP server
 
 **Status: KNOWN LIMITATION (ours, not the specification's).** *Found in Phase 6.*
