@@ -89,6 +89,47 @@ Barriers are shared knowledge legitimately: E-15/E-16 require the cop to declare
 every placement truthfully and openly, so both peers converge on an identical
 barrier set.
 
+### 3.1.1 The state model: why `LocalState` cannot represent global truth
+
+*Implemented in Phase 1.*
+
+E-8 and E-9 carry the heaviest sanctions in the specification — disqualification
+of the project — and they are the two rules a working implementation is most
+likely to break by accident, because the opponent's position is exactly what
+every part of the program would find convenient to know.
+
+The guarantee is therefore structural, not procedural. `LocalState` is a frozen,
+slotted dataclass whose fields are exhaustively:
+
+| Field | Why it is legal |
+|---|---|
+| `role` | Which side this peer is |
+| `position` | This peer's **own** cell — its own truth |
+| `board` | Dimensions and the barrier set. Barriers are public **by obligation**: the cop must declare every placement and its exact location (E-15, E-16), so both peers converge on an identical set. Shared knowledge the rules *require*, not a leak. |
+| `turn` | Local turn counter |
+| `barriers_placed` | This peer's own quota consumption |
+| `terminal` | Whether this peer considers the sub-game over |
+
+There is **no attribute** for the opponent's position: not `None`, not
+`Optional`, not a private underscore field. `slots=True` means one cannot be
+attached at runtime either. A leak surfaces as an `AttributeError` in a unit
+test rather than as an advantage that survives to the league.
+
+This follows the Dec-POMDP formalism directly (Ch. 1, PDF p. 21): each agent's
+observation Ωᵢ is a strict subset of the true state S. An object able to hold S
+would be modelling a game nobody is playing.
+
+**Capture therefore lives outside the state** (D-28). All three capture
+conditions bar E-47 need both positions, so they are free functions in
+`domain/capture.py` taking both as explicit parameters, called by something that
+legitimately holds them: the test harness in Phase 1, the capture-claim protocol
+(E-21, E-22) in the delivered system, and the replay verifier afterwards. The
+awkwardness of threading both positions through is the point — it makes every
+omniscient call site visible and countable.
+
+`sim/` is the one package containing an omniscient component, and its docstring
+says so in the first line: **nothing in it is production authority**.
+
 ### 3.2 Observations — `domain/scent.py`, `domain/observation.py`
 
 Implements the emission/decay physics of Chapter 4 exactly as configured:

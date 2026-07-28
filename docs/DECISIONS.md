@@ -449,6 +449,98 @@ Appendix F value has neighbours anywhere near that close.
 
 ---
 
+## D-25 — Barrier placement is a distinct action, not a flag on a move
+
+**Decision.** Two action types: `Move(direction)` and `PlaceBarrier(cell)`. The
+PDF specifies no wire encoding, so this internal representation is ours.
+
+**Why.** PDF p. 37 makes placement an alternative *to* moving: "on a turn where
+the cop forgoes movement, it may place a barrier". Modelling it as a flag on a
+move would let "move and place" be expressed, which the rule does not permit.
+With two types the exclusivity is in the type system and cannot be violated by
+a careless caller.
+
+`PlaceBarrier` names the target cell explicitly because the cop must declare
+every placement and its exact location and may not place one covertly (E-15,
+E-16) — the declaration is part of the action, not an afterthought.
+
+**Cost.** The wire encoding still has to be agreed with the opponent in Phase 2;
+this decision constrains only our internals.
+
+*Added in Phase 1.*
+
+---
+
+## D-26 — "No legal move" (E-47) means no legal *relocation*
+
+**Decision.** A thief is trapped when it has no legal move to an adjacent cell.
+`STAY` does not rescue it.
+
+**Why.** Read alone, "a thief imprisoned with no legal move whatsoever" would
+never trigger: `STAY` is in the FIXED move set, so a legal action always exists.
+But the rule's own parenthetical defines the condition precisely — *"all
+adjacent cells blocked by barriers and/or board edges"* (PDF p. 37) — which is
+about adjacency, not about available actions. Board edges count, so a thief in a
+corner needs only two barriers to be trapped.
+
+This is why `rules.py` exposes `legal_relocations` alongside `legal_moves`: the
+distinction is what makes the rule expressible at all.
+
+**Cost.** None. The alternative reading makes E-47 dead text.
+
+*Added in Phase 1.*
+
+---
+
+## D-27 — A "step" is a completed full turn
+
+**Decision.** The survival counter and the move ceiling both count **full
+turns** — both peers having acted — not individual agent actions.
+
+**Why.** The PDF's own unit of time is the full turn: scent decay is applied
+"at the end of each full turn — after both the cop and the thief have completed
+their move" (Ch. 4, PDF p. 43). Counting half-turns would make
+`survival_threshold` and `max_moves` mean different things on the two sides,
+and both are shared config values that must mean the same thing to both peers.
+
+**Cost.** A sub-game runs 35 full turns rather than 35 individual actions —
+twice as long in wall-clock terms. Consistent with the PDF's framing.
+
+**Reversal condition.** An opponent counting half-turns; worth confirming
+alongside the turn model (Q-2).
+
+*Added in Phase 1.*
+
+---
+
+## D-28 — Capture lives outside `LocalState`, in an adjudicator
+
+**Decision.** Capture evaluation is a set of free functions in
+`domain/capture.py` taking both positions as explicit parameters. It is never a
+method on `LocalState`, and `LocalState` gains no opponent field to support it.
+
+**Why.** All three capture conditions except E-47 need both positions. Had
+capture been a method on the state, the state would have needed the opponent's
+position — precisely what E-9 forbids, and the most natural way the rule would
+have been broken.
+
+Passing both positions explicitly is more awkward, and that awkwardness is the
+feature: every omniscient call site is visible and countable. In Phase 1 the
+only caller is the test harness; in the delivered system it is the capture-claim
+protocol (E-21, E-22) and the replay verifier — both of which have a *right* to
+the information.
+
+`TransitionResult.barrier_cell` exists for the same reason: a barrier placement
+can capture (E-46), but the transition function reports the cell and lets the
+adjudicator make the comparison, rather than reaching for the thief's position
+itself.
+
+**Cost.** Callers must thread both positions through. Contained: three functions.
+
+*Added in Phase 1.*
+
+---
+
 ## D-17 — One test per mandatory rule, named by rule ID
 
 **Decision.** Test functions carry the rule ID, e.g.

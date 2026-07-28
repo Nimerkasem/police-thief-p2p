@@ -355,6 +355,41 @@ separate email.
 
 ---
 
+## Q-15 — May the cop barrier the cell it is standing on?
+
+**Status: NEGOTIATE.** *Discovered in Phase 1.*
+
+PDF p. 37 lists the legal placement targets explicitly: *"any cell within one
+step of it — **the cell it stands on itself**, or one of the four orthogonally
+adjacent cells"*. So placing a barrier on one's own cell is permitted in as many
+words.
+
+But the same sentence says the cell "becomes impassable to **both** players
+until the end of the game". The PDF never says what happens to a cop standing on
+a cell it has just made impassable. Three readings, none excluded by the text:
+
+1. **The cop is now trapped there.** Every move out is a move *from* a blocked
+   cell, which the rules do not forbid — only entry is forbidden — so on this
+   reading the cop can still leave but never return. This is the reading we
+   implement, because the movement rule constrains destinations only.
+2. **The cop cannot move at all**, having barriered itself in place. This makes
+   the action self-destructive and effectively dead.
+3. **The placement is illegal in practice**, and the PDF's phrase is loose.
+
+We implement reading 1: `validate_move` checks the *destination* for barriers
+and says nothing about the origin, so a cop that barriers its own cell may walk
+away and may not come back. Note this also makes `STAY` illegal for that cop,
+since `STAY`'s destination is the blocked cell it occupies — a consequence that
+falls out of the rule rather than being written into it.
+
+**Impact if the opponent reads it differently:** low but real. A cop that
+barriers its own cell and then moves would, under reading 2, have made an
+illegal move — and an illegal move is rejected by the opposing agent (PDF p. 38)
+and can escalate to a technical loss. Worth one sentence in negotiation; the
+tactic is unlikely to be worth using either way.
+
+---
+
 ## Q-14 — `min_games_to_pass` = 2 matches, but E-31 says "matches against different groups"
 
 **Status: RESOLVED**, non-issue, recorded for clarity.

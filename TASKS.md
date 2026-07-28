@@ -70,29 +70,39 @@ serialisation key-order independence.
 
 ---
 
-## Phase 1 — Base logic, single process `[M]`
+## Phase 1 — Base logic, single process `[M]` ✅ COMPLETE
 
 *Depends on Phase 0. Corresponds to PDF stage 1. No network, no crypto, no AI.*
+*171 domain tests; 385 total, all passing.*
 
-- [ ] `[M]` `domain/state.py` — local truth. **No attribute for the opponent's
-      position** (D-9).
-- [ ] `[M]` `domain/rules.py` — legal move set (orthogonal + STAY, no
-      diagonals), bounds, barrier occupancy.
-- [ ] `[M]` Barrier mechanics: placement only when the cop forgoes movement,
-      only within one step, quota `max_barriers`, permanent, impassable to both.
-- [ ] `[M]` Capture detection — all three conditions: cop lands on thief's cell;
-      barrier placed on thief's cell (E-46); thief has no legal move (E-47).
-- [ ] `[M]` `domain/scoring.py` — capture / survival / technical loss, all
-      values from config, no literals.
-- [ ] `[M]` Terminal conditions: `max_moves`, `survival_threshold`.
-- [ ] `[M]` A headless driver running a full sub-game in one process with two
-      trivial policies.
+- [x] `[M]` `domain/state.py` — local truth. **No attribute for the opponent's
+      position** (D-9), frozen and slotted so one cannot be attached at runtime.
+- [x] `[M]` `domain/coordinates.py`, `domain/board.py` — geometry, bounds, the
+      barrier set, deterministic queries. All dimensions from `SharedConfig`.
+- [x] `[M]` `domain/rules.py` — legal move set (orthogonal + STAY, no
+      diagonals), bounds, barrier occupancy, deterministic legal-action order.
+- [x] `[M]` Barrier mechanics: cop-only, placement replaces movement, within one
+      step, quota `max_barriers`, permanent, impassable to both, declared
+      explicitly (E-15, E-16).
+- [x] `[M]` Capture — all three conditions: cop lands on thief's cell; barrier
+      on thief's cell (E-46); thief with no legal relocation (E-47, D-26).
+- [x] `[M]` `domain/terminal.py` — survival threshold, move ceiling, technical
+      loss, structured `TerminalResult`.
+- [x] `[M]` `domain/scoring.py` — single entry point, all values from config.
+      Tie rule provided separately as match-level (Ch. 9), not a sub-game
+      outcome.
+- [x] `[M]` `domain/transition.py` — deterministic, pure, validation before
+      application so an illegal action never partially modifies state.
+- [x] `[M]` `domain/simultaneity.py` — the unresolved Q-2/Q-9 cases isolated
+      behind a swappable policy rather than silently decided.
+- [x] `[M]` `sim/` — test-only headless harness, trivial deterministic policies,
+      `python -m police_thief.sim.headless`.
 
-**Exit:** two agents move legally on the grid; a move into a barrier is
-rejected; coordinate overlap triggers capture; a full sub-game terminates with a
-correct score. (PDF stage-1 milestone.)
-**Tests:** E-13, E-14, E-46, E-47, E-48, barrier quota, barrier permanence,
-placement constraints.
+**Exit criterion met:** two agents move legally on the grid; a move into a
+barrier is rejected; coordinate overlap triggers capture; a full sub-game
+terminates with a correct score. (PDF stage-1 milestone.)
+
+**Carried forward:** `docs/prd/` seven PRD stubs (E-50), still administrative.
 
 ---
 

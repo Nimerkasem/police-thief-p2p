@@ -15,8 +15,8 @@ verification procedure. Rule IDs are Appendix E's own numbering
 **Naming convention** (D-17): test functions carry the rule ID, e.g.
 `test_e13_rejects_diagonal_move`, so coverage is greppable.
 
-**Implementation status.** Phase 0 (configuration foundation) is implemented and
-its tests exist; the names below in `§9` are real and runnable. Everything else
+**Implementation status.** Phases 0 (configuration) and 1 (game domain) are
+implemented; the names in `§9` and `§10` are real and runnable. Everything else
 remains a specification for the phase that will implement it.
 
 ```bash
@@ -79,6 +79,66 @@ python -m pytest
 | CLI: deterministic output | `test_verify_cli.py::test_output_is_deterministic_across_runs` | `AUTO` |
 | CLI: invalid config exits non-zero | `test_verify_cli.py::test_invalid_shared_config_exits_nonzero`, `::test_missing_file_exits_nonzero` | `AUTO` |
 | CLI: no credential contents printed | `test_verify_cli.py::test_no_credential_contents_are_printed` | `AUTO` |
+
+---
+
+## 10. Implemented — Phase 1 game domain
+
+171 tests, all passing. Files under `tests/domain/`.
+
+| Requirement | Test | Class |
+|---|---|---|
+| **E-13** each direction legal from the interior | `test_movement.py::test_each_direction_is_legal_from_the_board_interior` (×5) | `AUTO` |
+| **E-13** `STAY` is a legal action | `test_movement.py::test_stay_is_a_legal_action` | `AUTO` |
+| **E-14** diagonals have no representation | `test_movement.py::test_diagonals_have_no_representation` | `AUTO` |
+| Moves off the board rejected | `test_movement.py::test_moving_off_the_north_edge_is_rejected`, `::test_moving_off_the_south_edge_is_rejected` | `AUTO` |
+| Barriers block both roles | `test_movement.py::test_moving_into_a_barrier_is_rejected`, `::test_barriers_block_the_cop_too` | `AUTO` |
+| Move set is read from config, not assumed | `test_movement.py::test_move_outside_the_agreed_move_set_is_rejected` | `AUTO` |
+| Legal-action order is deterministic | `test_movement.py::test_legal_moves_have_a_fixed_deterministic_order`, `::test_legal_moves_are_stable_across_repeated_calls` | `AUTO` |
+| Generated moves are all genuinely legal | `test_movement.py::test_every_generated_move_is_actually_legal` | `AUTO` |
+| Board geometry, bounds, axis convention | `test_board.py::test_board_dimensions_come_from_config`, `::test_board_respects_a_nonzero_axis_start_index`, `::test_shift_follows_the_documented_axis_convention` (×5) | `AUTO` |
+| No pre-placed static obstacles exist | `test_board.py::test_board_has_no_barriers_initially` | `AUTO` |
+| Deterministic neighbour and placement-target order | `test_board.py::test_neighbours_are_in_fixed_nsew_order`, `::test_placement_targets_are_own_cell_then_neighbours` | `AUTO` |
+| **E-15** only the cop may place barriers | `test_barriers.py::test_cop_may_place_a_barrier`, `::test_thief_may_not_place_a_barrier`, `::test_thief_barrier_action_is_rejected_by_the_transition` | `AUTO` |
+| Placement within one step; beyond rejected | `test_barriers.py::test_placement_within_one_step_is_legal` (×5), `::test_placement_beyond_one_step_is_rejected` (×5) | `AUTO` |
+| Placement inside the board; no overlap | `test_barriers.py::test_placement_outside_the_board_is_rejected`, `::test_placement_on_an_existing_barrier_is_rejected` | `AUTO` |
+| Quota enforced from config | `test_barriers.py::test_quota_comes_from_configuration`, `::test_quota_is_enforced`, `::test_placement_decrements_the_remaining_quota` | `AUTO` |
+| Placement replaces movement | `test_barriers.py::test_placement_replaces_movement`, `::test_barrier_action_is_a_distinct_action_kind` | `AUTO` |
+| Barriers are permanent and block both | `test_barriers.py::test_barrier_is_permanent`, `::test_barrier_blocks_the_placing_cop`, `::test_barrier_blocks_the_thief` | `AUTO` |
+| **E-15** placement emits a public declaration | `test_barriers.py::test_placement_emits_a_public_declaration_event` | `AUTO` |
+| Illegal placement leaves state untouched | `test_barriers.py::test_illegal_placement_leaves_state_untouched` | `AUTO` |
+| **Capture 1** cop lands on the thief | `test_capture.py::test_cop_landing_on_the_thief_is_a_capture`; end-to-end `test_headless_sim.py::test_cop_walks_onto_the_thief_and_captures` | `AUTO` |
+| No false capture when cells differ | `test_capture.py::test_no_capture_when_cells_differ`, `::test_adjacent_is_not_captured` | `AUTO` |
+| **E-46** barrier on the thief's cell | `test_capture.py::test_barrier_on_the_thief_cell_is_a_capture`; end-to-end `test_headless_sim.py::test_barrier_placed_on_the_thief_cell_captures` | `AUTO` |
+| **E-47** thief with no legal move | `test_capture.py::test_thief_walled_in_on_four_sides_is_captured`, `::test_board_edges_count_towards_imprisonment`, `::test_stay_does_not_rescue_a_walled_in_thief`; end-to-end `test_headless_sim.py::test_thief_with_no_legal_move_is_captured` | `AUTO` |
+| Capture reason is recorded exactly | `test_capture.py::test_capture_terminal_records_reason_winner_and_turn`, `::test_movement_capture_takes_precedence_over_imprisonment` | `AUTO` |
+| **Q-2/Q-9** unresolved cases are isolated | `test_capture.py::test_cell_swap_is_not_a_capture_under_the_default_policy`, `::test_entering_a_vacated_cell_is_not_a_capture_under_the_default_policy`, `::test_thief_moving_onto_the_cop_is_a_capture_under_the_default_policy`, `::test_an_alternative_policy_changes_the_outcome` | `AUTO` |
+| Survival fires at the configured threshold | `test_terminal_and_scoring.py::test_survival_fires_at_the_configured_threshold`, `::test_survival_threshold_is_read_from_config_not_hard_coded` | `AUTO` |
+| Move ceiling fires at `max_moves` | `test_terminal_and_scoring.py::test_move_ceiling_fires_at_max_moves` | `AUTO` |
+| Terminal evaluation is deterministic | `test_terminal_and_scoring.py::test_terminal_results_are_deterministic` | `AUTO` |
+| No play after a terminal state | `test_terminal_and_scoring.py::test_no_action_is_possible_after_a_terminal_state`; `test_headless_sim.py::test_no_turn_may_follow_a_terminal_state` | `AUTO` |
+| **E-48** capture / survival / technical scores from config | `test_terminal_and_scoring.py::test_capture_scores_come_from_config`, `::test_survival_scores_come_from_config`, `::test_technical_loss_zeroes_both_sides`, `::test_max_moves_is_scored_as_survival` | `AUTO` |
+| Scoring asymmetry matches the PDF | `test_terminal_and_scoring.py::test_scoring_is_asymmetric_as_the_pdf_intends` | `AUTO` |
+| Every terminal reason is scored | `test_terminal_and_scoring.py::test_scoring_rejects_nothing_it_should_score` | `AUTO` |
+| Tie rule is match-level, not sub-game | `test_terminal_and_scoring.py::test_tie_rule_awards_tie_score_to_both_sides`, `::test_tie_is_not_a_sub_game_terminal_reason` | `AUTO` |
+| Transition determinism and purity | `test_transition.py::test_same_input_produces_the_same_output`, `::test_input_state_is_not_mutated`, `::test_a_sequence_of_transitions_is_reproducible` | `AUTO` |
+| Illegal action never partially modifies state | `test_transition.py::test_illegal_action_does_not_partially_modify_state` (×2), `::test_blocked_move_does_not_modify_state` | `AUTO` |
+| Events are deterministic and ordered | `test_transition.py::test_events_are_deterministic_and_ordered` | `AUTO` |
+| Transition has no opponent parameter | `test_transition.py::test_transition_has_no_opponent_parameter` | `AUTO` |
+| **E-9** `LocalState` field set is exhaustive | `test_information_boundary.py::test_local_state_fields_are_exactly_the_legal_set` | `AUTO` |
+| **E-9** forbidden field names absent | `test_information_boundary.py::test_forbidden_field_names_are_absent` (×11) | `AUTO` |
+| **E-9** attribute cannot be attached at runtime | `test_information_boundary.py::test_opponent_position_attribute_does_not_exist`, `::test_slots_prevent_attaching_an_opponent_position_at_runtime`, `::test_local_state_has_no_dict_to_smuggle_fields_into` | `AUTO` |
+| **E-9** serialisation carries no opponent position | `test_information_boundary.py::test_serialisation_contains_no_opponent_position`, `::test_serialised_cop_state_does_not_encode_the_thief_cell`, `::test_serialised_state_exposes_only_legal_keys` | `AUTO` |
+| **E-9** public API offers no global truth | `test_information_boundary.py::test_no_domain_function_offers_global_truth`, `::test_capture_functions_are_not_methods_on_local_state` | `AUTO` |
+| Barriers are public *legitimately* | `test_information_boundary.py::test_barriers_are_public_and_that_is_legitimate` | `AUTO` |
+| Harness omniscience is a separate type | `test_information_boundary.py::test_harness_is_a_distinct_type_from_local_state`, `::test_harness_omniscience_never_enters_either_state`, `::test_sim_package_is_documented_as_test_only` | `AUTO` |
+| Leak inspection over a played sub-game | `test_information_boundary.py::test_leak_inspection_over_a_whole_played_sub_game` | `AUTO` |
+| Full sub-game completes and terminates | `test_headless_sim.py::test_full_sub_game_completes_and_terminates`, `::test_two_passive_agents_reach_the_survival_threshold` | `AUTO` |
+| Simulation is bounded; no infinite loop | `test_headless_sim.py::test_simulation_is_bounded_by_the_configured_ceiling`, `::test_simulation_terminates_on_a_short_configuration` | `AUTO` |
+| Every applied action was legal | `test_headless_sim.py::test_every_applied_action_was_legal` | `AUTO` |
+| The run is reproducible | `test_headless_sim.py::test_the_run_is_reproducible`, `::test_headless_cli_is_deterministic` | `AUTO` |
+| Role states remain separate objects | `test_headless_sim.py::test_states_remain_separate_objects` | `AUTO` |
+| Correct final score on capture | `test_headless_sim.py::test_capture_scores_the_configured_amounts` | `AUTO` |
 
 ---
 

@@ -11,11 +11,11 @@ verbal hint that may well be a lie. Integrity between two mutually distrustful
 peers is guaranteed not by trust but by mathematics — commit-reveal over
 SHA-256, audited after the fact.
 
-> **Status: Phase 0 complete** — the configuration foundation is implemented and
-> tested (214 tests). Game mechanics begin at Phase 1 of [TASKS.md](TASKS.md).
-> Everything the specification binds numerically now lives in one policy table,
-> is enforced on load, and is reduced to a single hash both peers must agree on
-> before play.
+> **Status: Phases 0–1 complete** (385 tests). The configuration foundation
+> reduces every binding parameter to one policy table and one hash both peers
+> must agree on before play; the game domain implements the board, movement,
+> barriers, all three capture conditions, terminal conditions and scoring, in a
+> single process. Networking begins at Phase 2 of [TASKS.md](TASKS.md).
 
 ---
 
@@ -207,9 +207,40 @@ it.
 python -m pytest
 ```
 
+## Running a headless sub-game
+
+Phase 1 implements the game domain: board, movement, barriers, capture, terminal
+conditions and scoring. It runs in one process with trivial deterministic
+policies — test infrastructure, not the distributed game.
+
+```bash
+python -m police_thief.sim.headless --shared config/game.json --show-turns 5
+```
+
+```
+headless sub-game (single process, test harness)
+  board                7x7
+  cop start            [0, 0]
+  thief start          [3, 3]
+  survival threshold   35
+  move ceiling         35
+  barrier quota        14
+  simultaneity policy  post_move_positions_only (not PDF-resolved)
+  result               survival on turn 35; winner thief; cop 5, thief 10
+  turns played         35
+  (no opponent position in either peer's state)
+```
+
+The harness holds both positions in order to adjudicate captures. That is a
+property of the *test driver*, not of the game: in the delivered system the same
+job is split between the capture-claim protocol and the post-match replay
+verifier, and no live component ever sees both sides. Neither peer's
+`LocalState` has a field for the opponent's position — see
+[the state model](docs/ARCHITECTURE.md#311-the-state-model-why-localstate-cannot-represent-global-truth).
+
 ## Running the game
 
-Not yet applicable — game mechanics begin in Phase 1. Once Phase 2 lands:
+Not yet applicable — networking begins in Phase 2. Once it lands:
 
 ```bash
 python -m police_thief peer --role police
