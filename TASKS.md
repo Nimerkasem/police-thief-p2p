@@ -1,0 +1,355 @@
+# TASKS
+
+Dependency-ordered phases, optimised for the fastest path to a working compliant
+MVP. Ownership is deliberately unassigned.
+
+**Legend.** `[M]` mandatory for compliance · `[O]` optional enhancement ·
+`[P]` process/administrative obligation.
+
+**Exit criterion for every phase:** the system runs **end-to-end** at that
+phase's scope, and the phase's tests pass. This follows the PDF's incremental
+delivery principle (Ch. 10) — each layer is built, tested and stabilised
+*before* the next is laid on it, so at any moment the space of possible faults
+is confined to the layer just added.
+
+The PDF's own seven-stage order (Ch. 10, PDF pp. 101–103) is a
+**recommendation**, not a rule. Phases below follow it closely because its
+rationale is sound, with two deviations noted at Phase 4 and Phase 6.
+
+---
+
+## Phase 0 — Project skeleton `[M]`
+
+*No dependencies. Nothing here touches game logic.*
+
+- [ ] `[M]` `pyproject.toml`: Python 3.12, deps `fastmcp`, `pytest`; dev deps
+      `pytest-asyncio`. Nothing else yet.
+- [ ] `[M]` Package skeleton `src/police_thief/` per
+      [ARCHITECTURE.md](docs/ARCHITECTURE.md) §9 — empty modules with docstrings
+      stating each module's single responsibility.
+- [ ] `[M]` `config/police/` and `config/thief/` trees, each with `game.json`
+      (Appendix F values, `num_games: 6` per D-2) and `game.toml`.
+- [ ] `[M]` Config loader producing a **typed** config object.
+- [ ] `[M]` Config validator enforcing MINIMUM / FIXED / NEGOTIABLE semantics —
+      rejects any lowered MINIMUM or altered FIXED value.
+- [ ] `[M]` Canonical JSON helper (`sort_keys=True`, `separators=(",",":")`,
+      UTF-8) — used by config hashing, commit hashing and artefact writing.
+      Single implementation, no duplicates.
+- [ ] `[M]` `tests/` skeleton with the rule-ID naming convention (D-17).
+- [x] `[P]` `PLAN.md` and `TODO.md` at repo root (E-50).
+- [ ] `[P]` `docs/prd/` with seven PRD stubs, one per development stage (E-50).
+
+**Exit:** `pytest` runs green on config load/validate.
+**Tests:** E-12 (parametrised over every MINIMUM and FIXED parameter), canonical
+serialisation key-order independence.
+
+---
+
+## Phase 1 — Base logic, single process `[M]`
+
+*Depends on Phase 0. Corresponds to PDF stage 1. No network, no crypto, no AI.*
+
+- [ ] `[M]` `domain/state.py` — local truth. **No attribute for the opponent's
+      position** (D-9).
+- [ ] `[M]` `domain/rules.py` — legal move set (orthogonal + STAY, no
+      diagonals), bounds, barrier occupancy.
+- [ ] `[M]` Barrier mechanics: placement only when the cop forgoes movement,
+      only within one step, quota `max_barriers`, permanent, impassable to both.
+- [ ] `[M]` Capture detection — all three conditions: cop lands on thief's cell;
+      barrier placed on thief's cell (E-46); thief has no legal move (E-47).
+- [ ] `[M]` `domain/scoring.py` — capture / survival / technical loss, all
+      values from config, no literals.
+- [ ] `[M]` Terminal conditions: `max_moves`, `survival_threshold`.
+- [ ] `[M]` A headless driver running a full sub-game in one process with two
+      trivial policies.
+
+**Exit:** two agents move legally on the grid; a move into a barrier is
+rejected; coordinate overlap triggers capture; a full sub-game terminates with a
+correct score. (PDF stage-1 milestone.)
+**Tests:** E-13, E-14, E-46, E-47, E-48, barrier quota, barrier permanence,
+placement constraints.
+
+---
+
+## Phase 2 — FastMCP infrastructure, two processes `[M]`
+
+*Depends on Phase 1. Corresponds to PDF stage 2. Geometric payloads over
+localhost; natural language and crypto come later.*
+
+- [ ] `[M]` `net/schemas.py` — envelope and per-tool request/response schemas,
+      validated on ingress and egress.
+- [ ] `[M]` `net/mcp_server.py` — FastMCP server exposing the eight tools.
+- [ ] `[M]` `net/mcp_client.py` — client calling the opponent's tools.
+- [ ] `[M]` `phases.py` — state machine with transition table; rejects illegal
+      transitions **without mutating state** (E-4, E-5).
+- [ ] `[M]` `orchestrator.py` — single gateway; constructs and coordinates the
+      five sub-systems; holds no decision logic and no low-level I/O (E-3).
+- [ ] `[M]` `audit/log.py` — append-only JSONL writer (D-15).
+- [ ] `[M]` `__main__.py` — `peer --role police|thief`.
+- [ ] `[M]` Two-process launch under separate config directories (E-1, E-2).
+- [ ] `[M]` Idempotency: duplicate suppression keyed on
+      `(game_id, sub_game, step, role, tool)`; conflicting duplicate rejected.
+
+**Exit:** a message leaving peer A over localhost is received and correctly
+decoded at peer B; a full sub-game plays across two processes. (PDF stage-2
+milestone.)
+**Tests:** E-1, E-2, E-3, E-4, E-5, duplicate handling, invalid sequence
+rejection.
+
+---
+
+## Phase 3 — Strategy module, "blind" `[M]`
+
+*Depends on Phase 2. Corresponds to PDF stage 3. Full information; no scent, no
+language, no deception yet.*
+
+- [ ] `[M]` `strategy/base.py` — `BrainBase` with `_pick_move` / `_decide_move`,
+      wired at the mandated seam: after hint decode, before commit packing.
+- [ ] `[M]` `strategy/heuristic.py` — Manhattan-distance policy against a known
+      target (D-14).
+- [ ] `[M]` Strategy class selection via `config/game.toml → [strategy]`.
+
+**Exit:** given a known target location, the agent computes and executes the
+shortest path with no manual intervention. (PDF stage-3 milestone.)
+**Tests:** shortest-path correctness; legality of every emitted move; strategy
+module is genuinely separable (swap the brain, everything else unchanged).
+
+---
+
+## Phase 4 — Scent, belief and natural language `[M]`
+
+*Depends on Phase 3. Corresponds to PDF stage 4 — the PDF calls this the most
+sensitive stage.*
+
+**Deviation from PDF ordering:** the PDF folds LLM integration into this stage.
+We implement the **template** verbal provider only (D-13), deferring any actual
+model. Template is the PDF's own default and costs zero tokens, so this is a
+narrowing of scope, not a reordering.
+
+- [ ] `[M]` `domain/scent.py` — emission window, radial falloff, decay
+      `τ(t+1) = max(0, (1−ρ)·τ(t) + Δτ)`, applied **once per full turn** after
+      both moves.
+- [ ] `[M]` Each peer observes **only the opponent's** field.
+- [ ] `[M]` `domain/belief.py` — Bayesian belief map with a hint-reliability
+      coefficient; updated from scent and from received hints.
+- [ ] `[M]` `strategy/verbal.py` — the `template` provider: produce a hint,
+      classify an incoming hint. Zero tokens, deterministic.
+- [ ] `[M]` Hint validation: ≤ `hint_max_words`; reject numeric position
+      encodings (E-26, E-27).
+- [ ] `[M]` `intent` flag (`truth` / `lie`) carried and later sealed.
+- [ ] `[M]` Strategy switches to belief-driven target selection.
+
+**Exit:** free-language reporting is translated into inference; the scent map
+updates and decays every step; the verbal layer produces a hint (true or false).
+(PDF stage-4 milestone.)
+**Tests:** all of §4 in [ACCEPTANCE_TESTS.md](docs/ACCEPTANCE_TESTS.md), plus
+E-25, E-26, E-27.
+
+---
+
+## Phase 5 — Security and cryptography `[M]`
+
+*Depends on Phase 4.*
+
+**Deviation from PDF ordering:** the PDF places cloud exposure (stage 5) before
+cryptography (stage 6). We invert. Rationale: crypto is testable entirely
+offline and is the highest-consequence rule cluster (E-17 through E-24, plus
+E-19's score-zero sanction), whereas tunnelling is external tooling that adds no
+testable code. Inverting keeps the fault space confined to code we wrote. The
+PDF's stated reason for its order — *don't debug crypto through an unproven
+transport* — is honoured, because Phase 2 already proved the transport over
+localhost.
+
+- [ ] `[M]` `crypto/commit.py` — canonical sealed record per D-4;
+      `SHA256(canonical_json(record))`; nonce via `secrets.token_hex(16)`.
+- [ ] `[M]` Four-phase sequencing: commit → acknowledge → reveal (**nonce
+      withheld**) → final reveal (E-17, E-18).
+- [ ] `[M]` `crypto/audit.py` — mutual audit recomputing every hash; mismatch ⇒
+      technical loss, score 0 (E-19, E-36).
+- [ ] `[M]` Config-hash exchange in `hello`; refuse to play on mismatch (E-11).
+- [ ] `[M]` Scent-model hash including the numeric example; refuse on mismatch
+      (E-23).
+- [ ] `[M]` `crypto/step_zero.py` — hardware + code version + team + sub-game +
+      **commit hash** (E-24, E-53), sealed per D-8.
+- [ ] `[M]` Capture claim with the thief's truthful sealed response (E-21,
+      E-22).
+- [ ] `[M]` Deadline tracker and watchdog (E-6, E-7) — deferred to here because
+      they need a real protocol to guard.
+
+**Exit:** a move is committed then revealed with a valid nonce; step-zero
+verifies hardware; a deliberately tampered log is caught by the audit. (PDF
+stage-6 milestone.)
+**Tests:** all of §3 in [ACCEPTANCE_TESTS.md](docs/ACCEPTANCE_TESTS.md), plus
+E-6, E-7.
+
+---
+
+## Phase 6 — Replay verifier `[M]`
+
+*Depends on Phase 5. Brought forward from the PDF's stage 7 because it is the
+strongest automated check we have on the crypto layer, and a mandatory
+submission artefact in its own right (E-20).*
+
+- [ ] `[M]` `replay/verifier.py` — **pure function** over a log file, returning
+      `Verified OK` / `TAMPERED` plus the offending entry (D-12). Shared with
+      the end-of-match mutual audit — one implementation, not two.
+- [ ] `[M]` `replay/viewer.py` — Tkinter window: load `[log_file]`, step
+      forward/backward, green `Verified OK` stamp or red `TAMPERED` banner.
+- [ ] `[M]` Log sealing: JSONL → canonical `log_<game_id>_g<NN>.json` (D-15).
+- [ ] `[M]` `replay --log <path>` entry point.
+
+**Exit:** clean log ⇒ `Verified OK`; single-character tamper ⇒ `TAMPERED`;
+viewer steps through a recorded sub-game.
+**Tests:** E-19, E-20, tamper parametrised across every sealed field.
+
+---
+
+## Phase 7 — Live GUI `[M]`
+
+*Depends on Phase 4 (belief) and Phase 2 (state machine). Independent of
+Phases 5–6, so it can proceed in parallel.*
+
+- [ ] `[M]` `gui/live.py` — Tkinter: belief heatmap grid, deeper colour = higher
+      probability; own position marked; barriers marked.
+- [ ] `[M]` Turn banner: green `YOUR TURN` on receipt; grey `LOCKED` after
+      commit, with input ignored while locked.
+- [ ] `[M]` GUI constructed with handles to local-truth and belief modules
+      **only** (D-9, E-8, E-9).
+- [ ] `[M]` Tk main thread + asyncio worker thread with a queue drained by
+      `root.after()`.
+
+**Exit:** the GUI displays a live sub-game; no window can show the opponent's
+true position.
+**Tests:** E-8, E-9 — including the structural assertion that the live state
+object has no opponent-position attribute.
+
+---
+
+## Phase 8 — Public exposure and a real remote match `[M]`
+
+*Depends on Phases 2–7. Corresponds to PDF stage 5.*
+
+- [ ] `[M]` Bind the server to a host/port suitable for tunnelling.
+- [ ] `[M]` Document the tunnel procedure in `README.md` (ngrok or Localtonet —
+      external tooling, not our code).
+- [ ] `[M]` Opponent URL from `config/game.toml → [network] opponent_url`.
+- [ ] `[M]` Timeout and retry behaviour validated against real network latency,
+      not just a fake clock.
+- [ ] `[M]` Play a full match against a peer on a **different machine**.
+
+**Exit:** an agent on a remote machine connects via the tunnel and plays a full
+round. (PDF stage-5 milestone.)
+**Tests:** E-10 (manual, off-host handshake); E-6 under real latency.
+
+---
+
+## Phase 9 — Reporting shell `[M]`
+
+*Depends on Phase 8. Corresponds to PDF stage 7. The PDF is explicit that this
+is built last because it consumes every layer beneath it.*
+
+- [ ] `[M]` `report/build.py` — the four artefacts: `declaration_<game_id>.json`,
+      `config_<game_id>_g<NN>.json`, `log_<game_id>_g<NN>.json`,
+      `result_<game_id>.json`. Mandatory fields: both teams' GitHub links (four
+      total), per-sub-game commit hash, total tokens consumed.
+- [ ] `[M]` `report/gatekeeper.py` — Quota Manager → Token Bucket → DOS
+      Detector, in that order, fail fast (E-28, E-29).
+- [ ] `[M]` `report/gmail.py` — OAuth 2.0, scope **`gmail.send` only** (E-30);
+      JSON as **attachment**, never free text (E-33, E-34); honour 429 with
+      backoff.
+- [ ] `[M]` Recipient fixed to `rmisegal+uoh26finalgame@gmail.com` (E-51).
+- [ ] `[M]` Send gated on `result_agreement` (E-35) and a passed audit (E-36).
+- [ ] `[M]` `mode` defaults to `send`; `draft` refused for counting matches
+      (D-5).
+- [ ] `[M]` `matches/<game_id>/` artefact store, committed (Appendix F §2).
+- [ ] `[M]` Counted-match ledger driving the E-37 declaration, derived from
+      artefacts rather than hand-set (E-38).
+- [ ] `[P]` OAuth setup per Appendix A: enable Gmail API, consent screen, test
+      users, `gmail.send` scope, desktop credentials, first authorisation.
+      **`credentials.json` and `token.json` into `.gitignore` before any
+      commit** (E-39, E-40) — already covered by the shipped `.gitignore`.
+
+**Exit:** a match summary is sent by Gmail with the JSON attached and arrives
+intact. (PDF stage-7 milestone.)
+**Tests:** all of §5 and §6 in
+[ACCEPTANCE_TESTS.md](docs/ACCEPTANCE_TESTS.md).
+
+---
+
+## Phase 10 — League play `[M][P]`
+
+*Depends on Phase 9.*
+
+- [ ] `[P]` Negotiate with each opponent team before playing: shared config
+      values, sealed-record schema (D-4), turn model (D-6), capture resolution
+      (D-7), scent model + numeric example (E-23). See the NEGOTIATE items in
+      [OPEN_QUESTIONS.md](docs/OPEN_QUESTIONS.md).
+- [ ] `[P]` Warm-up matches (uncounted, permitted and recommended) for
+      calibration.
+- [ ] `[M]` At least `min_games_to_pass` = 2 counting matches against
+      **different** groups (E-31); at most `max_games_per_team` = 10.
+- [ ] `[M]` Exactly one counting match per opponent (E-52).
+- [ ] `[M]` Both sides send their own report for every counting match (E-35).
+- [ ] `[M]` Commit each match's artefacts.
+- [ ] `[P]` Escalate [OPEN_QUESTIONS.md](docs/OPEN_QUESTIONS.md) Q-12
+      (step-zero signing key) to the lecturer **before** the first counting
+      match.
+
+---
+
+## Phase 11 — Submission `[M][P]`
+
+*Depends on Phase 10.*
+
+- [ ] `[M]` Split into two repositories, cop and thief (D-16, E-49).
+- [ ] `[M]` `README.md` in **both** repos with all six mandatory components
+      (Ch. 9, PDF p. 97) — see the checklist in
+      [ACCEPTANCE_TESTS.md](docs/ACCEPTANCE_TESTS.md) §7.
+- [ ] `[M]` Document every contradiction choice from
+      [OPEN_QUESTIONS.md](docs/OPEN_QUESTIONS.md) in the README — where
+      identified, what chosen, why (PDF p. 5).
+- [ ] `[M]` Screenshots: Live GUI belief map; Replay showing `Verified OK`.
+- [ ] `[M]` Cross-link the two repositories in both READMEs.
+- [ ] `[M]` `PLAN.md`, `TODO.md`, `docs/prd/*` present in both repos (E-50).
+- [ ] `[M]` Verify no secret anywhere in **full git history**, not just HEAD
+      (E-39).
+- [ ] `[M]` Annotated tag `v1.0-submission`, pushed (E-41).
+- [ ] `[P]` Repos public, or shared with `rmisegal@gmail.com`.
+- [ ] `[P]` Moodle: PDF form with no field altered or moved (E-43); one
+      submission per member (E-44); 8-character group code (E-45); self-grade
+      for **code quality only** (E-55).
+
+---
+
+## Optional enhancements `[O]`
+
+Not to be started until every `[M]` item above is complete and verified.
+
+- [ ] `[O]` `ollama` verbal provider — local model, zero API tokens.
+- [ ] `[O]` `claude_api` / `claude_cli` providers. Note the brief excludes paid
+      LLM APIs; treat as out of scope unless that changes.
+- [ ] `[O]` `every_n_steps` throttling for the verbal layer.
+- [ ] `[O]` Richer movement policy — minimax / expectimax over the belief map,
+      barrier-trap planning.
+- [ ] `[O]` Reinforcement learning (Q-Learning). **Explicitly optional**; the
+      course did not teach it; only after all mandatory work is verified.
+- [ ] `[O]` Learning curves in the README — only meaningful if RL is used.
+- [ ] `[O]` Research and performance-analysis report
+      (`RESEARCH-REPORT-Performance-Analysis.md`) — the PDF marks this
+      "highly recommended".
+- [ ] `[O]` Visual polish beyond the mandated heatmap and banner. Lowest
+      priority in the stated ordering.
+
+---
+
+## Implementation notes carried forward
+
+- **Watchdog placement.** Phase 5 ships it as an asyncio task. If the loop
+  itself can wedge, it must be promoted to a separate thread. Decide by
+  measurement — deliberately induce a loop stall and observe whether the task
+  still fires — not by speculation.
+- **`--sub-games N` override.** Development convenience only; must be refused
+  when a match is flagged as counting (D-2).
+- **One canonical-JSON implementation.** Config hashing, commit hashing and
+  artefact writing must all call the same helper. Two implementations will
+  eventually disagree, and the failure mode is a failed audit in a real match.
