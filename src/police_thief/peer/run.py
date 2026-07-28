@@ -14,6 +14,7 @@ import argparse
 import asyncio
 import signal
 import sys
+import threading
 from pathlib import Path
 
 from police_thief.audit.writer import AuditLog
@@ -71,6 +72,19 @@ def _build_parser() -> argparse.ArgumentParser:
         help="play N cryptographic commit-reveal turns after READY",
     )
     parser.add_argument(
+        "--gui",
+        action="store_true",
+        help=(
+            "open the live window. Shows local truth only; headless without "
+            "it, so tests and CI runs are unchanged."
+        ),
+    )
+    parser.add_argument(
+        "--screenshot",
+        default=None,
+        help="save a PNG of the live window to this path before shutdown",
+    )
+    parser.add_argument(
         "--tamper",
         choices=["action", "nonce"],
         default=None,
@@ -82,7 +96,7 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-async def run_peer(args: argparse.Namespace) -> int:
+async def run_peer(args: argparse.Namespace, gui_slot=None) -> int:
     try:
         shared = load_shared_config(args.shared)
         private = load_private_config(args.private)
@@ -153,14 +167,32 @@ async def run_peer(args: argparse.Namespace) -> int:
     def _request_stop(*_: object) -> None:
         stop.set()
 
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        try:
-            loop.add_signal_handler(sig, _request_stop)
-        except (NotImplementedError, AttributeError):
-            # Windows ProactorEventLoop does not support add_signal_handler;
-            # KeyboardInterrupt still propagates and is handled by the caller.
-            signal.signal(sig, _request_stop)
+    # Signal handling is only possible on the main thread. Under --gui the peer
+    # runs in a worker (Tk owns the main thread), so we skip it there and let
+    # the GUI's window-close drive shutdown instead.
+    if threading.current_thread() is threading.main_thread():
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.add_signal_handler(sig, _request_stop)
+            except (NotImplementedError, AttributeError, ValueError):
+                # Windows ProactorEventLoop does not support
+                # add_signal_handler; KeyboardInterrupt still propagates.
+                try:
+                    signal.signal(sig, _request_stop)
+                except ValueError:
+                    pass
+
+    gui_task = None
+    gui_stop = asyncio.Event()
+    if gui_slot is not None:
+        from police_thief.gui.live import run_gui
+        from police_thief.gui.view_model import snapshot
+
+        gui_task = asyncio.create_task(
+            run_gui(gui_slot, lambda: snapshot(orchestrator), gui_stop)
+        )
+        print("  gui            live window open")
 
     server.start()
     orchestrator.mark_server_ready(server.url)
@@ -202,6 +234,19 @@ async def run_peer(args: argparse.Namespace) -> int:
     except KeyboardInterrupt:
         pass
     finally:
+        if gui_slot is not None:
+            orchestrator.final_status = (
+                "finished - see terminal for audit result"
+                if exit_code == EXIT_OK
+                else f"failed: {orchestrator.failure or 'see terminal'}"
+            )
+            from police_thief.gui.view_model import snapshot as _snap
+
+            gui_slot.publish(_snap(orchestrator))
+            await asyncio.sleep(0.6)  # let the main thread draw the last frame
+            gui_stop.set()
+            if gui_task is not None:
+                await gui_task
         await orchestrator.shutdown("interrupt" if stop.is_set() else "normal")
         await server.stop()
         print(f"  shutdown       {orchestrator.machine.state.value}")
@@ -294,11 +339,68 @@ def _corrupt_final_reveal(orchestrator, what: str) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
+    if args.gui:
+        return _main_with_gui(args)
     try:
         return asyncio.run(run_peer(args))
     except KeyboardInterrupt:
-        print("\ninterrupted", file=sys.stderr)
+        print("interrupted", file=sys.stderr)
         return EXIT_OK
+
+
+def _main_with_gui(args: argparse.Namespace) -> int:
+    """Tk owns the main thread; the peer's asyncio loop runs in a worker.
+
+    Tk cannot be driven from a worker thread -- it crashes the interpreter on
+    Windows -- and cannot be pumped from the asyncio loop, which stalls commit
+    exchanges past their deadline and fails turns. Giving it the main thread is
+    the arrangement that works, and it is what the architecture notes describe.
+    """
+    import threading
+
+    from police_thief.config.loader import load_shared_config
+    from police_thief.gui.capture import save_window_png
+    from police_thief.gui.live import PeerWindow, ViewSlot, drive_on_main_thread
+
+    try:
+        shared = load_shared_config(args.shared)
+        private = load_private_config(args.private)
+    except ConfigError as exc:
+        print(f"{type(exc).__name__}: {exc}", file=sys.stderr)
+        return EXIT_CONFIG_ERROR
+
+    try:
+        window = PeerWindow(
+            f"police-thief - {private.role.value}", shared.grid_size
+        )
+    except Exception as exc:
+        print(f"  gui            unavailable ({type(exc).__name__}); headless")
+        return asyncio.run(run_peer(args))
+
+    slot = ViewSlot()
+    result: dict[str, int] = {}
+
+    def worker() -> None:
+        try:
+            result["code"] = asyncio.run(run_peer(args, gui_slot=slot))
+        except KeyboardInterrupt:
+            result["code"] = EXIT_OK
+        except Exception as exc:  # pragma: no cover - defensive
+            print(f"peer failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+            result["code"] = EXIT_HANDSHAKE_FAILED
+        finally:
+            slot.stop()
+
+    thread = threading.Thread(target=worker, name="peer", daemon=True)
+    thread.start()
+    drive_on_main_thread(window, slot)
+    thread.join(timeout=60)
+
+    if args.screenshot:
+        saved = save_window_png(window, args.screenshot)
+        print(f"  screenshot     {saved or 'unavailable'}")
+    window.close()
+    return result.get("code", EXIT_HANDSHAKE_FAILED)
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -355,6 +355,27 @@ separate email.
 
 ---
 
+## Q-19 — Long `--gui` runs destabilise the FastMCP server
+
+**Status: KNOWN LIMITATION (ours, not the specification's).** *Found in Phase 6.*
+
+Under `--gui`, Tk must own the main thread, so the peer's asyncio loop runs in a
+worker. Past roughly six commit-reveal turns the FastMCP HTTP server then stops
+answering and a turn fails on "opponent commitment never arrived". Headless runs
+are unaffected -- a 35-turn two-process game completes and audits cleanly.
+
+Ruled out: redraw cost (skipping unchanged frames did not help) and signal
+handling (guarded). The remaining suspect is the uvicorn/FastMCP server's
+behaviour when its loop is not on the main thread.
+
+Not a specification question and not a compliance failure -- the mandatory
+artefacts (belief-map screenshots) are produced, and league play does not need
+the GUI. Options if it needs fixing: run the GUI as a separate process reading
+the operational JSONL, or drive Tk from the asyncio loop at a very low frame
+rate. Recorded rather than hidden.
+
+---
+
 ## Q-18 — A barrier landing on the cell the opponent already chose
 
 **Status: NEGOTIATE.** *Found in Phase 4, running full games.*

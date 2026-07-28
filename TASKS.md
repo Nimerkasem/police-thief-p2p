@@ -327,7 +327,24 @@ viewer steps through a recorded sub-game.
 
 ---
 
-## Phase 7 — Live GUI `[M]`
+## Phase 7 — Live GUI `[M]` ✅ COMPLETE (one limitation, Q-19)
+*34 new tests; 1394 total. Two-process GUI game completes with mutual audit
+`Verified OK`; screenshots in `docs/screenshots/`.*
+
+- [x] `[M]` `gui/view_model.py` — frozen `LiveView` with no field for the
+      opponent's position, so a renderer cannot draw one.
+- [x] `[M]` `gui/live.py` — belief heatmap, sensed scent, own cell, barriers,
+      turn banner, status panel, hint with declared intent, errors.
+- [x] `[M]` Tk on the main thread, peer asyncio in a worker; frozen snapshots
+      cross the boundary lock-free.
+- [x] `[M]` Headless by default — `--gui` is opt-in, so tests and CLI runs are
+      unchanged.
+- [x] `[M]` Screenshot capture for the submission evidence.
+- [ ] `[M]` Q-19: runs beyond ~6 turns under `--gui` destabilise the server.
+
+**Original plan below.**
+
+## Phase 7 — Live GUI `[M]` (original)
 
 *Depends on Phase 4 (belief) and Phase 2 (state machine). Independent of
 Phases 5–6, so it can proceed in parallel.*

@@ -150,6 +150,14 @@ class PeerOrchestrator:
             role=self.role, config=self.shared, board=self.state.board
         )
         self.strategy = strategy_for(self.role.value)
+        self.latest_opponent_hint: str = ""
+        self.latest_opponent_intent: str = ""
+        """The last hint the opponent revealed, and the intent it declared.
+
+        Legal to display: the opponent chose to send it. The declared intent
+        may be a lie -- that is the game, not a leak.
+        """
+        self.final_status: str | None = None
         self.opponent_audit_received = False
         """Set when we have verified the opponent's final reveal.
 
@@ -531,6 +539,14 @@ class PeerOrchestrator:
             return self._fail_turn(turn, "opponent reveal never arrived")
 
         opponent_action = decode_action(crypto_turn.opponent_reveal["action"])
+        # The hint the opponent chose to send us, and the intent it
+        # declared. Legal to display; the intent may well be a lie.
+        self.latest_opponent_hint = str(
+            crypto_turn.opponent_reveal.get("hint", "")
+        )
+        self.latest_opponent_intent = str(
+            crypto_turn.opponent_reveal.get("intent", "")
+        )
         self.machine.transition(PeerState.BOTH_REVEALS_VERIFIED, "verified")
 
         # 6. Only now may anything be applied.
