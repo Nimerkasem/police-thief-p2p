@@ -355,6 +355,46 @@ separate email.
 
 ---
 
+## Q-18 — A barrier landing on the cell the opponent already chose
+
+**Status: NEGOTIATE.** *Found in Phase 4, running full games.*
+
+Both peers choose from the same pre-turn board, so neither acts illegally, yet
+the cop's barrier can land on the very cell the thief had already picked. One of
+the two actions then cannot be carried out.
+
+Four readings, none excluded by the specification: the thief's move fails and it
+stays; the move succeeds and the barrier lands behind it; the placement fails,
+pre-empted; or the collision is itself a capture.
+
+The test harness applies the first, named `BLOCKED_MOVE_BECOMES_STAY`, **only so
+a demonstration terminates**. It is not a ruling. Two peers applying different
+readings would compute different boards from identical action sequences, which
+surfaces as a failed audit costing both sides the match.
+
+---
+
+## Q-17 — Revealed actions make the belief map nearly redundant
+
+**Status: NEGOTIATE.** *Raised in Phase 4.*
+
+Both start cells are signed shared conditions and every action is revealed each
+turn, so a peer can dead-reckon its opponent's exact position. Traced over a
+real game, the cop's belief peak matched the thief's true cell on every turn.
+
+That sits oddly with the belief/scent apparatus, which exists precisely because
+the opponent is meant to be hidden. Either the reveal is meant to be coarser
+than an exact action, or the intended uncertainty is only *within* a turn --
+you do not know their move when choosing yours, which commit-reveal already
+guarantees.
+
+The belief machinery is therefore built to carry genuine uncertainty
+(diffusion when a move is unknown, scent as a likelihood, impossible-cell
+exclusion) and simply happens to be well-informed under the present reveal
+semantics. Not resolved unilaterally.
+
+---
+
 ## Q-16 — In-turn reveal cannot be hash-verified (a property, not a defect)
 
 **Status: RESOLVED by the PDF — recorded because it is counter-intuitive.**

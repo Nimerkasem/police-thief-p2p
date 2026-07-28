@@ -39,10 +39,14 @@ from police_thief.crypto.exceptions import (
     CryptoTurnTimeoutError,
 )
 from police_thief.crypto.sealed import local_state_hash
-from police_thief.domain.actions import Action
+from police_thief.domain.actions import Action, PlaceBarrier
 from police_thief.domain.enums import Role
+from police_thief.domain.exceptions import DomainError
 from police_thief.domain.state import LocalState
+from police_thief.domain.transition import apply_action, observe_barrier
 from police_thief.protocol.action_codec import decode_action, encode_action
+from police_thief.strategy.heuristics import strategy_for
+from police_thief.strategy.tracker import OpponentTracker
 from police_thief.peer.clock import Clock, SystemClock
 from police_thief.peer.client import PeerClient
 from police_thief.peer.deadline import RetryPolicy, Watchdog
@@ -136,6 +140,12 @@ class PeerOrchestrator:
             game_id=self.game_id, role=self.role
         )
         self.last_opponent_action: Action | None = None
+        # Belief and scent about the opponent, plus the shipped default policy.
+        # Both read only what this peer is legally entitled to know.
+        self.tracker = OpponentTracker(
+            role=self.role, config=self.shared, board=self.state.board
+        )
+        self.strategy = strategy_for(self.role.value)
         self.opponent_audit_received = False
         """Set when we have verified the opponent's final reveal.
 
@@ -403,10 +413,20 @@ class PeerOrchestrator:
     # Outbound: the cryptographic turn
     # ------------------------------------------------------------------
 
+    def choose_action(self) -> Action:
+        """Ask the strategy for this turn's action.
+
+        Called before sealing. The strategy sees a :class:`LocalView` built from
+        this peer's own state plus its belief and the opponent's scent -- there
+        is no path from here to the opponent's true position.
+        """
+        self.tracker.note_own_position(self.state.position)
+        return self.strategy.choose(self.tracker.view(self.state))
+
     async def play_turn(
         self,
         turn: int,
-        action: Action,
+        action: Action | None = None,
         *,
         hint: str = "",
         intent: str = "truth",
@@ -418,6 +438,8 @@ class PeerOrchestrator:
         unreachable rather than merely unwise.
         """
         self.machine.transition(PeerState.SELECTING_ACTION, f"turn {turn}")
+        if action is None:
+            action = self.choose_action()
 
         # 1. Seal privately. The nonce is created here and never leaves.
         state_hash = local_state_hash(self.state.to_public_dict())
@@ -507,6 +529,22 @@ class PeerOrchestrator:
 
         # 6. Only now may anything be applied.
         self.machine.transition(PeerState.APPLYING_TURN, "applying")
+
+        # Our own action moves our own state. The opponent's action updates our
+        # belief and its reconstructed scent -- never a position field.
+        try:
+            self.state = apply_action(self.state, action, self.shared).state
+        except DomainError as exc:
+            return self._fail_turn(turn, f"our own action was illegal: {exc}")
+
+        if isinstance(action, PlaceBarrier):
+            self.tracker.observe_barrier(action.cell)
+        self.tracker.observe_opponent_action(
+            opponent_action, own_cell=self.state.position
+        )
+        if isinstance(opponent_action, PlaceBarrier):
+            self.state = observe_barrier(self.state, opponent_action.cell)
+
         self.crypto.finish_turn(turn)
         self.machine.transition(PeerState.TURN_COMPLETE, "turn complete")
 

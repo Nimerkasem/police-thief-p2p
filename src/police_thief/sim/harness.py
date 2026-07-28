@@ -22,8 +22,9 @@ from police_thief.domain.capture import (
     evaluate_full_turn_capture,
 )
 from police_thief.domain.coordinates import Coordinate
-from police_thief.domain.enums import Role
+from police_thief.domain.enums import Direction, Role
 from police_thief.domain.events import DomainEvent, SubGameFinished
+from police_thief.domain.exceptions import BlockedCellError
 from police_thief.domain.scoring import ScoreResult, calculate_score
 from police_thief.domain.simultaneity import (
     DEFAULT_SIMULTANEITY_POLICY,
@@ -92,6 +93,8 @@ class MatchHarness:
     thief: LocalState = field(init=False)
     policy: SimultaneityPolicy = DEFAULT_SIMULTANEITY_POLICY
     history: list[TurnRecord] = field(default_factory=list)
+    simultaneity_collisions: int = 0
+    """Times BLOCKED_MOVE_BECOMES_STAY was applied -- an unresolved rule."""
 
     def __post_init__(self) -> None:
         self.cop = LocalState.initial(Role.POLICE, self.config)
@@ -153,7 +156,17 @@ class MatchHarness:
                 )
 
         # --- thief acts -----------------------------------------------
-        thief_result = apply_action(self.thief, thief_action, self.config)
+        # If the cop's barrier landed on the cell the thief had already chosen,
+        # its move is no longer possible although nothing illegal was done. The
+        # harness resolves that by standing still -- see
+        # BLOCKED_MOVE_BECOMES_STAY: an unresolved rule, applied here only so a
+        # demonstration can terminate, and never a ruling.
+        try:
+            thief_result = apply_action(self.thief, thief_action, self.config)
+        except BlockedCellError:
+            thief_action = Move(Direction.STAY)
+            self.simultaneity_collisions += 1
+            thief_result = apply_action(self.thief, thief_action, self.config)
         events.extend(thief_result.events)
         self.thief = thief_result.state
 

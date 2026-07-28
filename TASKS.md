@@ -173,7 +173,21 @@ module is genuinely separable (swap the brain, everything else unchanged).
 
 ---
 
-## Phase 4 — Scent, belief and natural language `[M]`
+## Phase 4 — Scent, belief and natural language `[M]` (partially COMPLETE)
+
+**Done:** scent emission/decay from config (D-39), Bayesian belief map with
+impossible-cell exclusion (D-40), `BaseStrategy` + `LocalView`, deterministic
+cop and thief heuristics, per-peer `OpponentTracker`, strategy wired in before
+sealing. 1342 tests; 20 automated games all terminate; two real processes play
+6 strategy-driven crypto turns with mutual audit `Verified OK`.
+
+**Not done, deliberately:** the natural-language hint layer (template provider)
+and the LLM modes. The `hint` field is already sealed and revealed end to end,
+so that layer plugs in without a protocol change.
+
+**Original plan below.**
+
+## Phase 4 — Scent, belief and natural language `[M]` (original)
 
 *Depends on Phase 3. Corresponds to PDF stage 4 — the PDF calls this the most
 sensitive stage.*

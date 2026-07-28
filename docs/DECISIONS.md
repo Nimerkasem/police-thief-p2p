@@ -775,6 +775,43 @@ that only appears between two real processes, which is where the league runs.
 
 ---
 
+## D-39 — Scent radial falloff is Gaussian, sigma = 1.15
+
+**Decision.** Emission at squared distance d2 from the centre is
+`center_intensity * exp(-d2 / (2 * 1.15**2))`.
+
+**Why.** The specification fixes the centre intensity, the decay rate and the
+window size (all FIXED parameters) and describes the falloff only as "radial".
+Its figure, however, tabulates the whole 5x5 field, and sigma = 1.15 reproduces
+every one of those values to two decimal places -- 0.90 / 0.62 / 0.42 / 0.20 /
+0.14 / 0.04. That table is the only numeric anchor available, and an opponent
+reading the same document would most likely fit the same curve.
+
+Still a project decision, and one E-23 already requires to be exchanged and
+cryptographically locked with a concrete numeric example before a series. The
+model exposes `numeric_example()` for exactly that exchange.
+
+*Added in Phase 4.*
+
+---
+
+## D-40 — Belief map: predict/correct, with an honest fallback
+
+**Decision.** Predict through the motion model (exact when an action is known,
+diffusing over legal moves when not), correct by a `1 + w*intensity` scent
+likelihood, exclude impossible cells, renormalise. If contradictory evidence
+zeroes every cell, reset to uniform *minus* the cells just disproven.
+
+**Why.** The likelihood is `1 + intensity` rather than `intensity` so that a
+cell with no scent is merely unremarkable rather than impossible -- trails
+decay, and absence of scent is weak evidence, not proof. The fallback matters
+because an empty distribution is no basis for any decision; "I no longer know"
+is the truthful state, and it must not reinstate a cell we have just ruled out.
+
+*Added in Phase 4.*
+
+---
+
 ## D-17 — One test per mandatory rule, named by rule ID
 
 **Decision.** Test functions carry the rule ID, e.g.

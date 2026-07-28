@@ -116,6 +116,30 @@ class PostMovePositionsOnly:
         return None
 
 
+BLOCKED_MOVE_BECOMES_STAY = "blocked_move_becomes_stay"
+"""**UNRESOLVED (Q-18). Test-harness rule only -- not final.**
+
+A fifth collision the PDF does not address, found while running full games: the
+cop places a barrier on the very cell the thief had already chosen to move into.
+Both chose from the same pre-turn board, so neither did anything illegal, yet
+one of the two actions cannot be carried out.
+
+Readings, none excluded by the text:
+
+1. the thief's move fails and it stays put (what the harness does, so a game
+   can finish);
+2. the thief's move succeeds, the barrier landing behind it;
+3. the barrier placement fails, having been pre-empted;
+4. the collision is a capture, the thief having been sealed in mid-step.
+
+Reading 1 is used **only** by the sequential test harness, and only because a
+demonstration needs to terminate. It is not a ruling. A real match must agree
+one of these in negotiation before play -- two peers applying different readings
+would compute different boards from identical action sequences, and that
+surfaces as a failed audit costing both sides the match.
+"""
+
+
 DEFAULT_SIMULTANEITY_POLICY: SimultaneityPolicy = PostMovePositionsOnly()
 """The policy used unless an adjudicator is given another.
 

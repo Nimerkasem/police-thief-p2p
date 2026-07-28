@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 
 from police_thief.audit.writer import AuditLog
+from police_thief.crypto.exceptions import CommitmentMismatchError
 from police_thief.config.exceptions import ConfigError
 from police_thief.config.loader import load_private_config, load_shared_config
 from police_thief.peer.client import PeerClient
@@ -211,19 +212,18 @@ async def run_peer(args: argparse.Namespace) -> int:
 async def _play_turns(orchestrator, args) -> int:
     """Play N cryptographic turns, then exchange final reveals and audit.
 
-    The action comes from a trivial deterministic policy -- real strategy is a
-    later phase. What is being demonstrated is the protocol, not the play.
+    Each peer's own strategy chooses the action from its own belief and the
+    opponent's scent. Nothing else is available to it.
     """
     from police_thief.audit.verifier import verify_chain_file
     from police_thief.crypto.exceptions import CryptoError
-    from police_thief.sim.policies import first_legal_move
 
     try:
         for turn in range(1, args.turns + 1):
-            action = first_legal_move(orchestrator.state, orchestrator.shared)
-            commitment = None
+            # No action passed: the peer's own strategy chooses, from its own
+            # belief and the opponent's scent. Nothing else is available to it.
             opponent_action = await orchestrator.play_turn(
-                turn, action, hint="moving along", intent="truth"
+                turn, hint="moving along", intent="truth"
             )
             crypto_turn = orchestrator.crypto.completed_turns[turn]
             commitment = crypto_turn.local_commitment
@@ -241,20 +241,28 @@ async def _play_turns(orchestrator, args) -> int:
 
     # The audit is mutual (E-36): send ours, and stay until we have verified
     # theirs. Leaving early would let one side go unaudited.
+    sending = asyncio.create_task(orchestrator.send_final_reveal())
+    received = await orchestrator._await_condition(
+        lambda: orchestrator.opponent_audit_received
+    )
+    # A lost acknowledgement is not a failed audit. Whichever peer finishes
+    # first tears down its server, so the other's receipt can go missing even
+    # though its records arrived and verified. A rejection, by contrast, is a
+    # real mismatch and must fail.
     try:
-        sending = asyncio.create_task(orchestrator.send_final_reveal())
-        received = await orchestrator._await_condition(
-            lambda: orchestrator.opponent_audit_received
-        )
         verified = await sending
         print(f"  final reveal   opponent verified {verified} turn(s)")
-        print(
-            f"  mutual audit   {'both directions verified' if received else 'INCOMPLETE'}"
-        )
-        if not received:
-            return EXIT_HANDSHAKE_FAILED
-    except Exception as exc:
+    except CommitmentMismatchError as exc:
         print(f"  final reveal   REJECTED: {exc}", file=sys.stderr)
+        return EXIT_HANDSHAKE_FAILED
+    except Exception:
+        print("  final reveal   sent (acknowledgement not received)")
+
+    print(
+        f"  mutual audit   "
+        f"{'both directions verified' if received else 'INCOMPLETE'}"
+    )
+    if not received:
         return EXIT_HANDSHAKE_FAILED
 
     if orchestrator.audit is not None:
