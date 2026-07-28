@@ -11,10 +11,11 @@ verbal hint that may well be a lie. Integrity between two mutually distrustful
 peers is guaranteed not by trust but by mathematics — commit-reveal over
 SHA-256, audited after the fact.
 
-> **Status: documentation and analysis phase.** No application code exists yet.
-> This repository currently contains the requirements extraction, parameter
-> tables, architecture, protocol design, test map and phased plan. Implementation
-> begins at Phase 0 of [TASKS.md](TASKS.md).
+> **Status: Phase 0 complete** — the configuration foundation is implemented and
+> tested (214 tests). Game mechanics begin at Phase 1 of [TASKS.md](TASKS.md).
+> Everything the specification binds numerically now lives in one policy table,
+> is enforced on load, and is reduced to a single hash both peers must agree on
+> before play.
 
 ---
 
@@ -147,9 +148,68 @@ out of scope until every mandatory requirement is complete and verified.
 
 ---
 
-## Running it
+## Installation
 
-Not yet applicable — no application code exists. Once Phase 2 lands:
+Python 3.12. No third-party runtime dependency yet — `fastmcp` arrives with the
+network layer in Phase 2.
+
+```bash
+python -m pip install -e ".[dev]"
+```
+
+## Verifying a configuration
+
+The shared constitution and a private per-peer file are validated by a single
+command. It prints the configuration hash both peers must agree on, and exits
+non-zero if anything is wrong.
+
+```bash
+python -m police_thief.config.verify --shared config/game.json --private config/cop.toml.example
+```
+
+```
+VALID    shared configuration
+  file                 config/game.json
+  schema_version       1.2
+  agreed_between       group-a, group-b
+  board                7x7
+  sub-games per match  6
+  binding parameters   32 validated (14 fixed, 9 minimum, 9 negotiable)
+  config_sha256        410066bfe426b268092f69b07e95e2bab4fa8826dd5b1b8643cbbf6befd0a24d
+VALID    private configuration
+  file                 config/cop.toml.example
+  role                 police
+  ...
+  private config does not affect config_sha256
+```
+
+Before a match, compare digests with the opponent. A mismatch means refusing to
+play — not playing badly:
+
+```bash
+python -m police_thief.config.verify --shared config/game.json --expect-hash <their-digest>
+```
+
+To set up a peer, copy the template for its role and edit it:
+
+```bash
+mkdir -p config/police && cp config/cop.toml.example config/police/game.toml
+```
+
+The private file never crosses the network, is never signed, and is **not** an
+input to `config_sha256`. It may not define any key owned by the shared
+constitution — the loader rejects that outright rather than silently overriding
+it.
+
+## Tests
+
+```bash
+python -m pytest
+```
+
+## Running the game
+
+Not yet applicable — game mechanics begin in Phase 1. Once Phase 2 lands:
 
 ```bash
 python -m police_thief peer --role police

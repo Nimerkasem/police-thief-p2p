@@ -18,30 +18,40 @@ rationale is sound, with two deviations noted at Phase 4 and Phase 6.
 
 ---
 
-## Phase 0 — Project skeleton `[M]`
+## Phase 0 — Configuration foundation `[M]` ✅ COMPLETE
 
 *No dependencies. Nothing here touches game logic.*
+*214 tests passing. Shipped config hashes to `410066bf…fd0a24d`.*
 
-- [ ] `[M]` `pyproject.toml`: Python 3.12, deps `fastmcp`, `pytest`; dev deps
-      `pytest-asyncio`. Nothing else yet.
-- [ ] `[M]` Package skeleton `src/police_thief/` per
-      [ARCHITECTURE.md](docs/ARCHITECTURE.md) §9 — empty modules with docstrings
-      stating each module's single responsibility.
-- [ ] `[M]` `config/police/` and `config/thief/` trees, each with `game.json`
-      (Appendix F values, `num_games: 6` per D-2) and `game.toml`.
-- [ ] `[M]` Config loader producing a **typed** config object.
-- [ ] `[M]` Config validator enforcing MINIMUM / FIXED / NEGOTIABLE semantics —
-      rejects any lowered MINIMUM or altered FIXED value.
-- [ ] `[M]` Canonical JSON helper (`sort_keys=True`, `separators=(",",":")`,
-      UTF-8) — used by config hashing, commit hashing and artefact writing.
-      Single implementation, no duplicates.
-- [ ] `[M]` `tests/` skeleton with the rule-ID naming convention (D-17).
+- [x] `[M]` `pyproject.toml`: Python 3.12, src layout, `pytest`. No third-party
+      runtime dependency yet — `fastmcp` arrives in Phase 2.
+- [x] `[M]` Package skeleton `src/police_thief/` with `config/` and
+      `domain/enums.py`.
+- [x] `[M]` `config/game.json` (Appendix F values, `num_games: 6` per D-2) plus
+      `config/cop.toml.example` and `config/thief.toml.example`. One shared
+      constitution; per-role runtime directories (D-23, superseding D-18).
+- [x] `[M]` Config loader producing **typed frozen** objects.
+- [x] `[M]` Central parameter policy table (`config/policy.py`) — all 32
+      Appendix F parameters as data, self-checking at import. **The only module
+      permitted to hold an Appendix F literal.**
+- [x] `[M]` Validator enforcing FIXED / MINIMUM / NEGOTIABLE semantics.
+- [x] `[M]` Canonical JSON helper — single implementation, used by config
+      hashing and reserved for commit-reveal, log hashing and artefacts.
+- [x] `[M]` `config_sha256` — deterministic, order- and whitespace-independent,
+      unaffected by private configuration. **Hash only**; signing waits on Q-12.
+- [x] `[M]` Duplicate-key detection via `object_pairs_hook`.
+- [x] `[M]` Closed schema — rejects unknown, renamed and missing keys. Field
+      names are fixed and binding (PDF p. 130); a silently-ignored key is how two
+      peers end up computing different physics while both believe they agreed.
+- [x] `[M]` Cross-field validation; derived rules marked `DERIVED` (D-22).
+- [x] `[M]` Private config kept separate and forbidden from shadowing a shared
+      key (D-21).
+- [x] `[M]` `python -m police_thief.config.verify` CLI, non-zero exit on
+      failure, no secret material printed.
+- [x] `[M]` `tests/config/` — 214 tests.
 - [x] `[P]` `PLAN.md` and `TODO.md` at repo root (E-50).
 - [ ] `[P]` `docs/prd/` with seven PRD stubs, one per development stage (E-50).
-- [ ] `[M]` Config loader treats the key set as a **closed schema** — rejects
-      unknown or renamed keys. Field names are fixed and binding (PDF p. 130);
-      a silently-ignored key is how two peers end up computing different physics
-      while both believe they agreed.
+      *Carried into Phase 1 — administrative, not blocking.*
 
 **Starts now, runs in parallel with every phase** (D-20 — these have external
 latency that engineering cannot compress):

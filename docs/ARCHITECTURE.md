@@ -342,6 +342,47 @@ are fixed and binding** (PDF p. 130). The loader rejects unknown or renamed
 keys rather than ignoring them, since a silently-ignored key is how two peers
 end up computing different physics while both believing they agreed.
 
+### 7.1 The configuration boundary as implemented (Phase 0)
+
+```
+config/game.json  ──►  parse (duplicate-key hook)  ──►  validate  ──►  SharedConfig
+      │                                                    │              (frozen)
+      │                                                    ├─ 1 closed schema
+      │                                                    ├─ 2 Appendix F policy
+      └──►  canonical_json_bytes ──► SHA-256 ──►           └─ 3 cross-field
+                                config_sha256
+
+config/<role>/game.toml ──► parse ──► validate ──► PrivateConfig  (frozen)
+                                          │
+                                          └─ rejects any shared key (D-21)
+                                    NOT an input to config_sha256
+```
+
+| Module | Responsibility |
+|---|---|
+| `config/policy.py` | The 32 Appendix F parameters as data. **The only module permitted to contain an Appendix F literal.** Self-checks at import. |
+| `config/canonical.py` | The single canonical-JSON implementation. Every hash in the project — config, commit-reveal, log, artefacts — goes through it. |
+| `config/hashing.py` | `config_sha256`. Hash only; signing waits on Q-12. |
+| `config/loader.py` | Reading, duplicate-key detection, building frozen objects. |
+| `config/validation.py` | The three validation layers. Derived rules marked `DERIVED` (D-22). |
+| `config/models.py` | `SharedConfig` and `PrivateConfig` — separate, frozen, never merged. |
+| `config/exceptions.py` | One distinct type per failure mode. |
+| `config/verify.py` | CLI. Prints paths, never credential contents. |
+
+Three properties this boundary is built to guarantee:
+
+**Appendix F values exist in exactly one place.** Game logic reads a typed
+object. `test_shipped_config_carries_every_binding_value` asserts the shipped
+config matches the table; `test_exactly_32_binding_parameters` asserts the table
+is complete. Neither can drift without failing.
+
+**The two configurations never merge.** `SharedConfig` and `PrivateConfig` are
+separate frozen dataclasses with no conversion between them, and a private file
+naming a shared key is rejected outright rather than overridden (D-21).
+
+**Frozen after validation.** A config that can be mutated after validation is a
+config whose hash no longer describes it.
+
 **Config loading is the one place numeric constants enter the system.** Game
 logic reads from a typed config object; no numeric literal from the PDF appears
 in game code. A validator rejects any config that lowers a `MINIMUM` or alters a

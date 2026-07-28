@@ -1,0 +1,22 @@
+[project]
+name = "police-thief-p2p"
+version = "0.1.0"
+description = "Distributed Cops-and-Robbers over a Peer-to-Peer Network"
+requires-python = ">=3.12"
+dependencies = [
+    # fastmcp arrives in Phase 2; Phase 0 has no third-party runtime dependency.
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

@@ -15,8 +15,74 @@ verification procedure. Rule IDs are Appendix E's own numbering
 **Naming convention** (D-17): test functions carry the rule ID, e.g.
 `test_e13_rejects_diagonal_move`, so coverage is greppable.
 
-Tests do not exist yet — this document is the specification the test suite is
-written against, and the source for `tests/` in Phase 0 onward.
+**Implementation status.** Phase 0 (configuration foundation) is implemented and
+its tests exist; the names below in `§9` are real and runnable. Everything else
+remains a specification for the phase that will implement it.
+
+```bash
+python -m pytest
+```
+
+---
+
+## 9. Implemented — Phase 0 configuration foundation
+
+214 tests, all passing. Files under `tests/config/`.
+
+| Requirement | Test | Class |
+|---|---|---|
+| Exactly 32 binding parameters, each once | `test_validation.py::test_exactly_32_binding_parameters`, `::test_each_parameter_appears_exactly_once` | `AUTO` |
+| Status split is 14 FIXED / 9 MINIMUM / 9 NEGOTIABLE | `test_validation.py::test_status_distribution_matches_appendix_f` | `AUTO` |
+| Only three statuses exist (no DEFAULT, no OPTIONAL) | `test_validation.py::test_only_three_statuses_exist` | `AUTO` |
+| Shipped config carries every tabulated value | `test_validation.py::test_shipped_config_carries_every_binding_value` | `AUTO` |
+| **E-12** every FIXED accepts its binding value | `test_validation.py::test_fixed_parameter_accepts_the_binding_value` (×14) | `AUTO` |
+| **E-12** every FIXED rejects a different value | `test_validation.py::test_fixed_parameter_rejects_a_different_value` (×14) | `AUTO` |
+| **E-13/E-14** FIXED `move_set` rejects reordering and diagonals | `test_validation.py::test_fixed_move_set_rejects_a_reordering`, `::test_fixed_move_set_rejects_a_diagonal` | `AUTO` |
+| **E-12** every MINIMUM accepts the floor | `test_validation.py::test_minimum_parameter_accepts_the_floor` (×9) | `AUTO` |
+| **E-12** every MINIMUM accepts a greater value | `test_validation.py::test_minimum_parameter_accepts_a_greater_value` (×9) | `AUTO` |
+| **E-12** every MINIMUM rejects a lower value | `test_validation.py::test_minimum_parameter_rejects_a_lower_value` (×9) | `AUTO` |
+| **E-12** `grid_size` below 7 rejected | `test_validation.py::test_grid_size_below_seven_is_rejected` | `AUTO` |
+| Raised minimums load end to end | `test_validation.py::test_raised_minimums_survive_full_construction` | `AUTO` |
+| Every NEGOTIABLE accepts its default and agreed values | `test_validation.py::test_negotiable_parameter_accepts_the_tabulated_default` (×9), `::test_negotiable_parameter_accepts_an_agreed_value` | `AUTO` |
+| NEGOTIABLE domain checks | `test_validation.py::test_negotiable_parameter_rejects_an_out_of_domain_value` | `AUTO` |
+| Field names are a closed schema (PDF p. 130) | `test_loader.py::test_renamed_field_is_rejected_not_defaulted`, `::test_unknown_top_level_field_is_rejected`, `::test_unknown_nested_field_is_rejected` | `AUTO` |
+| Missing mandatory keys rejected | `test_loader.py::test_missing_top_level_section_is_rejected`, `::test_missing_nested_field_is_rejected`, `::test_missing_structural_field_is_rejected` | `AUTO` |
+| Duplicate JSON keys rejected | `test_loader.py::test_duplicate_key_is_rejected`, `::test_duplicate_key_in_nested_object_is_rejected`, `::test_duplicate_key_in_shipped_shape_is_rejected` | `AUTO` |
+| Wrong types rejected; bool ≠ int | `test_loader.py::test_wrong_type_is_rejected` (×9), `::test_bool_is_not_accepted_where_an_int_belongs` | `AUTO` |
+| Malformed JSON / bad UTF-8 / missing file | `test_loader.py::test_malformed_json_raises_parse_error`, `::test_invalid_utf8_raises_parse_error`, `::test_missing_file_raises_not_found` | `AUTO` |
+| Config frozen after validation | `test_loader.py::test_loaded_object_is_frozen` | `AUTO` |
+| Canonical JSON: key order irrelevant | `test_canonical.py::test_key_order_does_not_affect_output`, `::test_nested_key_order_does_not_affect_output` | `AUTO` |
+| Canonical JSON: whitespace irrelevant | `test_canonical.py::test_source_whitespace_does_not_reach_output` | `AUTO` |
+| Canonical JSON: arrays keep order | `test_canonical.py::test_array_order_is_preserved` | `AUTO` |
+| Canonical JSON: deterministic, UTF-8 | `test_canonical.py::test_repeated_calls_are_stable`, `::test_non_ascii_is_deterministic_utf8` | `AUTO` |
+| Canonical JSON: unsupported values rejected | `test_canonical.py::test_unsupported_values_are_rejected` (×10) | `AUTO` |
+| **E-11** hash deterministic, lowercase hex | `test_hashing.py::test_digest_is_lowercase_hex_of_length_64`, `::test_digest_is_stable_across_repeated_calls` | `AUTO` |
+| **E-11** hash ignores key order and whitespace | `test_hashing.py::test_key_order_does_not_change_the_digest`, `::test_whitespace_does_not_change_the_digest` | `AUTO` |
+| **E-11** hash changes when a binding value changes | `test_hashing.py::test_changing_a_shared_value_changes_the_digest` | `AUTO` |
+| **E-11** private config does not affect the hash | `test_hashing.py::test_private_configuration_does_not_affect_the_shared_digest`, `test_verify_cli.py::test_private_config_does_not_change_the_printed_hash` | `AUTO` |
+| **E-11** known-hash fixture | `test_hashing.py::test_shipped_config_matches_the_pinned_digest` | `AUTO` |
+| **E-11** refuse to play on mismatch | `test_hashing.py::test_verify_rejects_a_mismatched_digest`, `test_verify_cli.py::test_expect_hash_mismatch_refuses_to_play` | `AUTO` |
+| Private cop/thief configs load | `test_private.py::test_valid_cop_example_loads`, `::test_valid_thief_example_loads` | `AUTO` |
+| Invalid role / port / opponent URL rejected | `test_private.py::test_invalid_role_is_rejected`, `::test_invalid_port_is_rejected` (×4), `::test_invalid_opponent_url_is_rejected` (×4), `::test_missing_opponent_url_is_rejected` | `AUTO` |
+| **E-45** 8-character group id | `test_private.py::test_invalid_group_id_is_rejected` (×4), `::test_valid_group_id_is_accepted` | `AUTO` |
+| **E-39/E-40** examples carry no secrets, paths only | `test_private.py::test_examples_contain_no_secret_values` | `AUTO` |
+| **D-5** examples default to `send`, not `draft` | `test_private.py::test_examples_default_to_send_not_draft` | `AUTO` |
+| **D-21** private may not shadow a shared key | `test_private.py::test_private_config_may_not_shadow_a_shared_parameter` (×5) | `AUTO` |
+| **E-1** role must match the entry point | `test_private.py::test_role_must_match_the_entry_point` | `AUTO` |
+| Cross-field: start cell off the board | `test_validation.py::test_start_cell_outside_the_board_is_rejected` (×2), `::test_negative_start_cell_is_rejected` | `AUTO` |
+| Cross-field: identical start cells | `test_validation.py::test_identical_start_cells_are_rejected` | `AUTO` |
+| Cross-field: survival unreachable | `test_validation.py::test_survival_threshold_above_max_moves_is_rejected` | `AUTO` |
+| Cross-field: barrier quota exceeds board | `test_validation.py::test_barrier_quota_beyond_board_capacity_is_rejected` | `AUTO` |
+| Cross-field: scent window off the board | `test_validation.py::test_scent_window_wider_than_the_board_is_rejected` | `AUTO` |
+| Cross-field: deadline vs watchdog ordering | `test_validation.py::test_response_timeout_not_shorter_than_watchdog_is_rejected` | `AUTO` |
+| CLI: valid config, exit 0, prints hash | `test_verify_cli.py::test_valid_config_exits_zero_and_prints_the_hash` | `AUTO` |
+| CLI: deterministic output | `test_verify_cli.py::test_output_is_deterministic_across_runs` | `AUTO` |
+| CLI: invalid config exits non-zero | `test_verify_cli.py::test_invalid_shared_config_exits_nonzero`, `::test_missing_file_exits_nonzero` | `AUTO` |
+| CLI: no credential contents printed | `test_verify_cli.py::test_no_credential_contents_are_printed` | `AUTO` |
+
+---
+
+Everything below remains a specification for a later phase.
 
 ---
 

@@ -172,8 +172,23 @@ Units confirmed: only rows 3, 6 and 7 of table 19 carry an explicit unit
 `7×7` and `5×5` — i.e. the side length, not an area.
 
 **Which may never be lowered or altered:** the 14 FIXED parameters may never
-change at all. The 11 MINIMUM parameters may never go below the tabulated value.
-The 7 NEGOTIABLE parameters are free by agreement. **Total 32.**
+change at all. The 9 MINIMUM parameters may never go below the tabulated value.
+The 9 NEGOTIABLE parameters are free by agreement. **Total 32.**
+
+> **Correction (Phase 0).** Pass 2 of this audit recorded the split as
+> "14 FIXED, 11 MINIMUM, 7 NEGOTIABLE". That was an arithmetic slip on my part:
+> the correct split is **14 / 9 / 9**. Counting from the tables above —
+> MINIMUM: `grid_size`, `max_barriers`, `max_moves`, `survival_threshold`,
+> `requests_per_minute`, `concurrent_requests`, `retry_backoff_sec`,
+> `max_retries`, `queue_depth` = 9. NEGOTIABLE: `axis_origin_corner`,
+> `axis_start_index`, `thief_start`, `cop_start`, `map_area`, `hint_max_words`,
+> `token_budget_per_series`, `response_timeout_sec`, `watchdog_timeout_sec` = 9.
+> The total was always 32, so no parameter was missing or duplicated — only the
+> per-status tally was wrong.
+>
+> The error was caught by building the policy table in code and counting it.
+> `tests/config/test_validation.py::test_status_distribution_matches_appendix_f`
+> now asserts 14/9/9, so the tally cannot drift from the table again.
 
 **Reference tables 20–22** (files/addresses, LLM modes, strategy keys) are
 labelled by the PDF as *reference only — not part of the agreed configuration
@@ -430,7 +445,7 @@ spelling (Q-4); the turn model (Q-2); capture resolution under simultaneity
 | Metric | Count |
 |---|---|
 | Appendix E rules found and verified | **55** (43 obligation, 11 prohibition, **1 recommendation**) |
-| Binding parameters in Appendix F | **32** (14 FIXED, 11 MINIMUM, 7 NEGOTIABLE) |
+| Binding parameters in Appendix F | **32** (14 FIXED, 9 MINIMUM, 9 NEGOTIABLE) |
 | Status vocabularies used by the PDF | **3** (no DEFAULT, no OPTIONAL) |
 | `COVERED` | **93** |
 | `MISSING` | **0** (3 found in pass 2, all fixed in pass 2) |

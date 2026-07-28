@@ -351,6 +351,104 @@ before the code needs them.
 
 ---
 
+## D-21 — The private config may not shadow a shared key at all
+
+**Decision.** Rather than implementing "shared JSON overrides private TOML", the
+loader **rejects** any private file that defines a key owned by the shared
+constitution (`PrivateConfigShadowsSharedError`).
+
+**Why.** PDF p. 132 requires the shared values to override any parallel key in
+the TOML *"so the private file can never 'weaken' a signed condition"*. The
+requirement is the guarantee, not the mechanism. Rejecting the shadowing
+delivers that guarantee more strongly than overriding does — a key that is never
+accepted can never win, under any future refactor — and it keeps the two
+configurations as separate typed objects rather than merging them into one.
+
+Overriding also has a failure mode rejection does not: a team could put
+`num_games = 1` in their private file, see it silently ignored, and believe they
+had configured something. Rejection tells them.
+
+**Cost.** A team migrating a value from private to shared must delete it from
+the TOML rather than leaving it as dead weight. That is the correct outcome.
+
+**Reversal condition.** An opponent insisting on genuine overlay semantics.
+
+*Added in Phase 0.*
+
+---
+
+## D-22 — Derived cross-field rules are marked as derived
+
+**Decision.** Cross-field validation contains seven rules the PDF does not state
+verbatim. Each is labelled `DERIVED` in `validation.py` with its justification,
+and each is justified by *some documented rule becoming unsatisfiable* if it were
+violated — not by general good sense.
+
+The derived rules: distinct start cells (identical cells would satisfy the
+capture condition before the first move); `survival_threshold <= max_moves`
+(otherwise survival, a documented win condition, is unreachable);
+`max_barriers <= cells - 2`; `pheromone_grid_size <= grid_size`; intensity and
+decay within `(0, 1]`; `response_timeout_sec < watchdog_timeout_sec` (Ch. 8
+separates a per-request deadline from a process-freeze threshold, and inverting
+them collapses the distinction); `min_games_to_pass <= max_games_per_team`.
+
+**Why.** The brief forbids inventing requirements, and these are inferences.
+Marking them keeps the boundary between quoted and inferred legible to a later
+reader — and to the opponent team, since a config we reject and they accept is a
+match that never starts.
+
+**Cost.** A negotiated config could in principle be rejected for a rule the PDF
+never stated. Mitigated by each rule being a genuine incoherence rather than a
+preference.
+
+*Added in Phase 0.*
+
+---
+
+## D-23 — Config paths: one shared file, role directories at runtime
+
+**Decision.** Ship `config/game.json` (the shared constitution) plus
+`config/cop.toml.example` and `config/thief.toml.example` as templates. At
+runtime each peer reads its own `config/<role>/game.toml`, copied from the
+matching template.
+
+**Why.** This supersedes D-18's `config/<role>/game.json`. Appendix B names the
+shared file `config/game.json` (PDF pp. 126, 130), and there is only ever *one*
+shared constitution — duplicating it per role would create two files that must
+be byte-identical to each other as well as to the opponent's, which is a
+needless third way for E-11 to fail. Chapter 2's mandatory *separation* concerns
+the per-peer runtime configuration, and that is preserved: two processes, two
+private files, two config directories.
+
+**Cost.** D-18 is superseded; recorded here rather than edited away so the
+reasoning trail stays intact.
+
+*Added in Phase 0.*
+
+---
+
+## D-24 — FIXED floats compare with a tolerance
+
+**Decision.** `_values_equal` compares FIXED float parameters with
+`math.isclose(rel_tol=1e-9)` rather than `==`.
+
+**Why.** `pheromone_decay` is tabulated as `0.10`. Today, `0.10` in the file and
+`0.10` in the policy table parse to the same double — but that is a property of
+these particular literals, not a guarantee of binary floating point. A team
+writing `1e-1`, or a future value like `0.3` reached by arithmetic, could differ
+in the last bit. Disqualifying a team over a last-bit difference would be a bug,
+not enforcement.
+
+Integers and lists still compare exactly; the tolerance applies only where the
+representation is genuinely approximate.
+
+**Cost.** In principle a value within 1e-9 of the binding value would pass. No
+Appendix F value has neighbours anywhere near that close.
+
+*Added in Phase 0.*
+
+---
+
 ## D-17 — One test per mandatory rule, named by rule ID
 
 **Decision.** Test functions carry the rule ID, e.g.

@@ -91,14 +91,52 @@ UTF-8 — so that formatting differences between the two teams' files cannot
 produce a false mismatch, and no semantic difference can produce a false match.
 
 ```
-config_sha256 = SHA256( canonical_json(config/game.json) )
+config_sha256 = SHA256( canonical_json_bytes( parsed(config/game.json) ) )
 ```
 
 `config_sha256` is **the PDF's own field name** (Appendix B, PDF p. 127), not a
 name we coined. Appendix B also requires the shared file to be *locked with a
 cryptographic signature* (PDF p. 126) and Appendix F §2 to be *locked
 cryptographically* (PDF p. 156) — so the shared config is **both hashed and
-signed**, not one or the other.
+signed**, not one or the other. **Phase 0 implements the hash only**; the
+signature waits on the step-zero signing key, which the PDF never defines
+([OPEN_QUESTIONS.md](OPEN_QUESTIONS.md) Q-12).
+
+**Exact calculation** — implemented in `police_thief.config.hashing`:
+
+1. Read the file as **UTF-8**. A decoding failure is `ConfigParseError`.
+2. Parse as JSON with an `object_pairs_hook` that **rejects duplicate keys**
+   within any one object (`DuplicateConfigKeyError`). The standard parser keeps
+   the last occurrence silently, which would let two peers read different values
+   from what each believes is the same document.
+3. Serialise the **entire parsed mapping** with
+   `json.dumps(..., sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+   allow_nan=False)`.
+4. Encode that text as **UTF-8** to bytes.
+5. `hashlib.sha256(bytes).hexdigest()` — 64 lowercase hex characters.
+
+The whole document is hashed, including `schema_version` and `agreed_between`:
+both peers load the same file, so the whole file is what must agree.
+
+Consequences, each covered by a test:
+
+- Source **key order** and **whitespace** do not affect the digest, so the two
+  teams may format their copies differently and still match.
+- Any change to a binding value **does** change the digest.
+- The **private TOML is not an input** and cannot affect it. The cop and thief
+  run different private files against one constitution and must produce the
+  same digest.
+- The digest is stable across processes and runs.
+
+The shipped `config/game.json` hashes to:
+
+```
+410066bfe426b268092f69b07e95e2bab4fa8826dd5b1b8643cbbf6befd0a24d
+```
+
+pinned in `tests/config/test_hashing.py::test_shipped_config_matches_the_pinned_digest`
+so that an unintended change to a binding value fails the suite rather than a
+match.
 
 ### `hello` — handshake and config agreement
 
