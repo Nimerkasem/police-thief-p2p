@@ -255,6 +255,37 @@ requirement.
 
 ---
 
+### 3.4.1 The transport as implemented (Phase 2)
+
+```
+ PROCESS A (cop)                              PROCESS B (thief)
+┌──────────────────────────┐   HTTP/MCP   ┌──────────────────────────┐
+│ FastMCP server :8801     │◄─────────────│ PeerClient               │
+│  health_check            │              │  gatekeeper → deadline → │
+│  receive_protocol_message│              │  bounded retry           │
+│        │ validated       │              └──────────────────────────┘
+│        ▼ Envelope        │   HTTP/MCP   ┌──────────────────────────┐
+│ PeerOrchestrator ────────┼─────────────►│ FastMCP server :8802     │
+│  identity → registry →   │  PeerClient  │  (same surface)          │
+│  state machine → act     │              │        │                 │
+│  LocalState (own only)   │              │        ▼                 │
+│  watchdog, events JSONL  │              │ PeerOrchestrator (same)  │
+└──────────────────────────┘              └──────────────────────────┘
+        no third process · no shared file · no shared memory
+```
+
+Layering, enforced by import-graph tests: `protocol/` (schemas + codec) knows
+no transport and no game; `peer/server.py`/`client.py` know FastMCP but import
+no rules, scoring, capture or strategy; `peer/orchestrator.py` coordinates but
+decides nothing (E-3). The server's single generic validated receiver replaces
+the eight-tool sketch in [PROTOCOL.md](PROTOCOL.md) §1 (decision D-29) — the
+handshake tools collapsed into one message channel; the Phase 5 turn tools will
+be added to the same surface.
+
+Pinned dependency: **fastmcp 3.4.5** (API verified before implementation:
+`FastMCP(name=)`, `@mcp.tool`, `run_async(transport="http", …)`,
+`Client(url | FastMCP)`, `call_tool → CallToolResult.data`, `ToolError`).
+
 ## 4. Process model for one peer
 
 One peer = **one OS process**, containing:

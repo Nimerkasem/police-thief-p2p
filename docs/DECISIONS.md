@@ -541,6 +541,128 @@ itself.
 
 ---
 
+## D-29 — Phase 2 wire protocol: envelope, versions, size bound, tool surface
+
+**Decision.** A single closed-schema envelope (ten keys) wrapping typed
+payloads; schema version matched exactly, protocol version compatible on major;
+a 64 KiB message bound; and a two-tool FastMCP surface (`health_check`,
+`receive_protocol_message`).
+
+**Why.** The PDF prescribes no wire protocol — it prescribes the obligations
+one must satisfy (E-11, E-26, E-27) and shows a single illustrative tool
+(PDF p. 28). One generic validated receiver beats many handlers because every
+extra tool is another place validation can drift. The size bound exists because
+an unbounded decoder is a denial-of-service surface (E-29). Exact schema
+matching but major-compatible protocol versions: a different schema version is
+a different key set with no safe way to guess omissions, while minor protocol
+additions must interoperate between two teams who cannot deploy simultaneously.
+
+Turn messages and a `TURN_INTENT` placeholder are deliberately absent: a
+message type no state accepts and no code produces is untestable dead code.
+They arrive in Phase 5 with the cryptography that gives them meaning.
+
+**Cost.** The whole protocol must be negotiated with each opponent — but that
+was already true of everything on the wire (D-4).
+
+**Reversal condition.** Opponent negotiation; the protocol version field exists
+precisely so this can change.
+
+*Added in Phase 2.*
+
+---
+
+## D-30 — Action wire encoding
+
+**Decision.** `{"v": 1, "kind": "move", "direction": "N"}` and
+`{"v": 1, "kind": "place_barrier", "cell": [r, c]}`. Role-independent; closed
+key set per kind; versioned separately from the envelope; well-formedness
+checked by the codec, board legality left to the domain.
+
+**Why.** The PDF prescribes no action encoding. Role is omitted because the
+envelope already carries `sender_role`, and a second copy of the same fact is a
+place for the two to disagree. The codec does not validate against a board
+because it has none — legality is the domain's job, and the receiving peer
+enforces the physics (PDF p. 38).
+
+Defined in Phase 2 but **transmitted only from Phase 5**: a move sent in the
+clear before commit-reveal would let either side react within the same turn,
+which is what the commitment scheme exists to prevent.
+
+**Cost.** Key spelling must be agreed with the opponent, since canonical
+serialisation makes it load-bearing (Q-4).
+
+*Added in Phase 2.*
+
+---
+
+## D-31 — Duplicates: cached replies for exact repeats, rejection for conflicts
+
+**Decision.** A bounded registry (capacity `queue_depth`, least-recently-
+inserted eviction) keyed on message id. Exact duplicate → the cached reply is
+returned and no work is redone. Same id with a different payload →
+`ConflictingDuplicateError`, logged as evidence. Evicted ids are treated as new.
+Payload comparison is by canonical bytes, not `==`.
+
+**Why.** A retry after a lost response is indistinguishable from a duplicate,
+so the far end must make repeats safe — and preserving the message id across
+retries (which the client does) is what makes that work. A conflicting reuse is
+the signature of trying to change a decision after the fact — what commit-reveal
+prevents — so it is rejected loudly rather than silently resolved either way.
+Canonical-bytes comparison means an opponent whose JSON library orders keys
+differently does not have every legitimate retry rejected as a conflict.
+
+**Cost.** An id evicted from a full registry and then retried is re-processed
+rather than replayed. Bounded memory is worth that: every handler is
+idempotent, so re-processing is harmless, while an unbounded registry is a
+memory leak a long series would find.
+
+*Added in Phase 2.*
+
+---
+
+## D-32 — Connection loss is an operational failure, not a game outcome
+
+**Decision.** When the opponent is unreachable, times out beyond bounds, or the
+watchdog fires, the peer records a structured failure (`peer_unavailable`,
+`watchdog_stall`), transitions to `DISCONNECTED`, winds down cleanly and exits
+non-zero. It does **not** declare itself the winner or the opponent the loser.
+
+**Why.** The PDF defines a technical loss for a side that crashes or exceeds
+time (Ch. 3, PDF p. 38), but *adjudicating* that is league business — both
+teams report to the lecturer, and E-35's dual-report mechanism is exactly how
+conflicting accounts get resolved. A peer that declares game outcomes about its
+opponent from its own perspective would be acting as its own referee, in a
+system whose defining property is that there is none.
+
+**Cost.** A genuinely crashed opponent yields no immediate scored result; it
+yields evidence in the operational log for later adjudication. That is the
+correct division of authority.
+
+*Added in Phase 2.*
+
+---
+
+## D-33 — The operational log is not the audit chain
+
+**Decision.** Peers write an append-only JSONL operational log (connections,
+retries, transitions, handshake results). It is explicitly **not** the
+cryptographic match log of PROTOCOL.md §11 — that is hash-chained, sealed, and
+arrives in Phase 5. The event sink *refuses* to write records containing
+credential-shaped keys or opponent-position keys, raising instead.
+
+**Why.** Two different artefacts with two different guarantees. Conflating them
+would invite treating operational telemetry as evidence, which it is not — it
+proves nothing about the game and is not verified by anyone. The refusal (rather
+than redaction) on forbidden keys means a careless caller gets an exception at
+write time, not a leaked token in a file that later gets committed (E-39) or an
+opponent position in a file that later gets shared (E-9).
+
+**Cost.** None; the two logs coexist.
+
+*Added in Phase 2.*
+
+---
+
 ## D-17 — One test per mandatory rule, named by rule ID
 
 **Decision.** Test functions carry the rule ID, e.g.

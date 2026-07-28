@@ -106,33 +106,52 @@ terminates with a correct score. (PDF stage-1 milestone.)
 
 ---
 
-## Phase 2 — FastMCP infrastructure, two processes `[M]`
+## Phase 2 — FastMCP infrastructure, two processes `[M]` ✅ COMPLETE
 
-*Depends on Phase 1. Corresponds to PDF stage 2. Geometric payloads over
-localhost; natural language and crypto come later.*
+*Depends on Phase 1. Corresponds to PDF stage 2. Transport and handshake;
+turn payloads arrive with commit-reveal in Phase 5.*
+*331 new tests; 716 total, all passing. fastmcp pinned at 3.4.5.*
 
-- [ ] `[M]` `net/schemas.py` — envelope and per-tool request/response schemas,
-      validated on ingress and egress.
-- [ ] `[M]` `net/mcp_server.py` — FastMCP server exposing the eight tools.
-- [ ] `[M]` `net/mcp_client.py` — client calling the opponent's tools.
-- [ ] `[M]` `phases.py` — state machine with transition table; rejects illegal
-      transitions **without mutating state** (E-4, E-5).
-- [ ] `[M]` `orchestrator.py` — single gateway; constructs and coordinates the
-      five sub-systems; holds no decision logic and no low-level I/O (E-3).
-- [ ] `[M]` `audit/log.py` — append-only JSONL writer (D-15) against the record
-      schema in [PROTOCOL.md](docs/PROTOCOL.md) §11, including the **LLM
-      discussion fields** required by PDF p. 94. The scent field is never
-      stored — the verifier recomputes it (D-19).
-- [ ] `[M]` `__main__.py` — `peer --role police|thief`.
-- [ ] `[M]` Two-process launch under separate config directories (E-1, E-2).
-- [ ] `[M]` Idempotency: duplicate suppression keyed on
-      `(game_id, sub_game, step, role, tool)`; conflicting duplicate rejected.
+- [x] `[M]` `protocol/` — closed-schema envelope (10 keys), typed payloads per
+      message type, canonical-JSON codec with a 64 KiB bound, versioning
+      (schema exact, protocol major-compatible), action wire codec (D-30,
+      defined now, transmitted from Phase 5).
+- [x] `[M]` `peer/server.py` — FastMCP server: `health_check` +
+      one generic validated receiver (D-29). Never mutates LocalState; no game
+      logic; structured `ok:false` replies rather than transport exceptions.
+- [x] `[M]` `peer/client.py` — FastMCP client: gatekeeper-admitted, deadlined,
+      bounded retries with preserved message ids; failure taxonomy
+      (unavailable / timeout / rejection / invalid response).
+- [x] `[M]` `peer/states.py` — 13-state lifecycle machine; illegal transitions
+      raise without state change (E-4, E-5); terminal-state immutability;
+      idempotent re-entry; timestamped transition history.
+- [x] `[M]` `peer/orchestrator.py` — single gateway (E-3); identity checks
+      (game id, sender/receiver role); hello→config-hash→ready handshake;
+      refuse-to-play on hash mismatch (E-11); dependency-injected throughout.
+- [x] `[M]` `peer/registry.py` — bounded idempotency registry (D-31): cached
+      replies for exact duplicates, `ConflictingDuplicateError` for id reuse,
+      LRU eviction at `queue_depth`.
+- [x] `[M]` `peer/gatekeeper.py` — queue → token-bucket rate → concurrency
+      admission from Appendix F values (E-28 foundation, reusable for Phase 9).
+- [x] `[M]` `peer/deadline.py` — deadline tracker + bounded retry (E-6),
+      fire-once watchdog (E-7), fake-clock testable.
+- [x] `[M]` `peer/events.py` — operational JSONL log that *refuses* to record
+      secrets or opponent positions (D-33). Explicitly not the audit chain.
+- [x] `[M]` `peer/run.py` — independent entry point per peer; role from
+      private config; non-zero exit on failed handshake; Ctrl+C-safe.
+- [x] `[M]` `scripts/run_two_peers.py` — launches two real processes;
+      demonstrated: symmetric READY, delayed start, config mismatch (both
+      refuse, both exit 1), peer unavailable (exit 1), clean shutdown.
 
-**Exit:** a message leaving peer A over localhost is received and correctly
-decoded at peer B; a full sub-game plays across two processes. (PDF stage-2
-milestone.)
-**Tests:** E-1, E-2, E-3, E-4, E-5, duplicate handling, invalid sequence
-rejection.
+**Exit criterion met:** two real OS processes handshake over HTTP FastMCP,
+verify identical config hashes, and both reach READY with no central process.
+
+**Deferred to Phase 5 deliberately:** the cryptographic match log (the JSONL
+here is operational telemetry only, D-33), turn messages, and the
+`(game_id, sub_game, step, role)` idempotency key — Phase 2's key is
+`message_id`; the turn-scoped key needs turns to exist.
+
+**Carried forward:** `docs/prd/` seven PRD stubs (E-50).
 
 ---
 

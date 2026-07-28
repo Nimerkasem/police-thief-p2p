@@ -2,6 +2,116 @@
 
 The minimum FastMCP tool interface and wire contract between two peers.
 
+> **Implementation status (Phase 2).** The handshake layer is implemented and
+> running between two real processes: envelope schema, codec, config-hash
+> exchange, readiness, duplicate handling, retry/timeout behaviour and the
+> state machine. §0 below documents the implemented Phase 2 wire format, which
+> supersedes the sketches in §§2–4 for the messages it covers. Turn messages,
+> commit-reveal and the capture claim (§§5–6) remain design, implemented in
+> Phase 5. Built against **fastmcp 3.4.5**.
+
+---
+
+## 0. Phase 2 wire format (implemented)
+
+### 0.1 Envelope
+
+Every message is one JSON object with exactly these ten keys — a closed schema;
+unknown or missing keys are rejected (`ProtocolValidationError`):
+
+```jsonc
+{
+  "schema_version":   "1.0",       // must match exactly
+  "protocol_version": "1.0",       // compatible iff major versions match
+  "message_id":       "<uuid4>",   // preserved across retries (idempotency key)
+  "game_id":          "…",         // both peers launched with the same value
+  "sender_role":      "police",    // "police" | "thief"
+  "receiver_role":    "thief",
+  "message_type":     "hello",     // closed set, §0.2
+  "turn_number":      null,        // int ≥ 0 or null; null throughout Phase 2
+  "timestamp":        "2026-07-28T12:00:00.000+00:00",  // informational ONLY
+  "payload":          { … }        // closed schema per message type
+}
+```
+
+Encoding is canonical JSON (the single project implementation), UTF-8, bounded
+at **64 KiB** — an unbounded decoder is a DoS surface (E-29). The timestamp is
+never hashed and never orders anything: two machines have two clocks, and the
+PDF names clock drift among the real-world failures to survive (p. 109).
+Ordering comes from `turn_number` and the state machine.
+
+### 0.2 Message types and payloads (closed set)
+
+| Type | Payload keys | Purpose |
+|---|---|---|
+| `health_check` | — | Liveness probe; carries no game information |
+| `hello` | `peer_name`, `software_version`, `capabilities` | Introduce; verify mandatory capabilities |
+| `config_hash` | `config_sha256`, `config_schema_version` | E-11 exchange |
+| `config_accepted` | `config_sha256` | Hashes match |
+| `config_rejected` | `reason`, `our_config_sha256`, `their_config_sha256` | Refuse to play |
+| `ready` | — | Handshake complete on the sender's side |
+| `ack` | `acknowledged_message_id` | Generic acknowledgement |
+| `error` | `code`, `detail` | Structured failure report |
+| `game_finished` | `reason` | Sub-game/match conclusion signal |
+| `shutdown` | `reason` | Clean wind-down notice |
+
+No payload has a field for a position, a board, or a cell — asserted by test.
+Turn-bearing messages (`commit`/`ack`/`reveal`…) are deliberately absent until
+Phase 5; see D-29.
+
+### 0.3 FastMCP tool surface
+
+Two tools per peer, symmetric on both sides:
+
+- `health_check()` → `{ok, peer}`
+- `receive_protocol_message(envelope)` → `{ok, error, detail?, retryable?, envelope?}`
+
+Validation failures return `ok:false` **as a structured reply**, never as a
+transport exception, so both peers log the same thing and the sender can
+distinguish "rejected" (do not retry) from "lost" (retry within bounds).
+
+### 0.4 Handshake sequence (implemented)
+
+```
+A: hello ────────────────► B      capabilities checked both ways
+A ◄──────────────── hello :B      (as the reply payload)
+A: config_hash ──────────► B      B compares against its own hash
+A ◄─ config_accepted/rejected :B  rejected ⇒ ERROR state, no turns, exit 1
+A: ready ────────────────► B
+A ◄─────────────────── ack :B     READY when both sent and received ready
+```
+
+Both peers run this concurrently in both directions — each is client and server
+at once. On `config_rejected` **both** sides refuse to play (verified in a real
+two-process run: both exit 1, state `error`, no turn is ever attempted).
+
+### 0.5 Retries, deadlines, duplicates (implemented)
+
+- Every call: admitted by the Gatekeeper (queue → rate → concurrency, from
+  Appendix F values), deadlined at `response_timeout_sec`, retried at most
+  `max_retries` times with `retry_backoff_sec` spacing. Validation failures are
+  never retried.
+- The **message id is preserved across retries**; the receiver's bounded
+  registry (capacity `queue_depth`) returns the cached reply for an exact
+  repeat and raises `ConflictingDuplicateError` for the same id with a
+  different payload (D-31).
+- Watchdog: `watchdog_timeout_sec` of silence → structured `watchdog_stall`,
+  `DISCONNECTED`, controlled wind-down. Connection loss is an operational
+  failure, not a self-declared game outcome (D-32).
+
+### 0.6 Peer lifecycle states (implemented)
+
+```
+CREATED → STARTING → SERVER_READY → CONNECTING → HELLO_EXCHANGE
+        → CONFIG_EXCHANGE → CONFIG_VERIFIED → READY_WAIT → READY
+        → FINISHING → FINISHED
+```
+
+`ERROR` (terminal) is reachable from every non-terminal state; `DISCONNECTED`
+is **not** terminal — it allows the controlled wind-down `→ FINISHING →
+FINISHED`. Illegal transitions raise and leave the state unchanged. Turn states
+arrive in Phase 5.
+
 Design constraints from [REQUIREMENTS.md](REQUIREMENTS.md): symmetric peers, no
 central referee, commit-reveal over SHA-256 with the nonce hidden until end of
 match, natural-language hints only (**never numeric position protocols**, E-27),

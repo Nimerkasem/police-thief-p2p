@@ -11,11 +11,13 @@ verbal hint that may well be a lie. Integrity between two mutually distrustful
 peers is guaranteed not by trust but by mathematics — commit-reveal over
 SHA-256, audited after the fact.
 
-> **Status: Phases 0–1 complete** (385 tests). The configuration foundation
-> reduces every binding parameter to one policy table and one hash both peers
-> must agree on before play; the game domain implements the board, movement,
-> barriers, all three capture conditions, terminal conditions and scoring, in a
-> single process. Networking begins at Phase 2 of [TASKS.md](TASKS.md).
+> **Status: Phases 0–2 complete** (716 tests). Configuration reduces every
+> binding parameter to one policy table and one hash; the game domain
+> implements board, movement, barriers, capture, terminal conditions and
+> scoring; and two independent peer processes now handshake over FastMCP —
+> each a server and client at once — verifying identical configuration hashes
+> before either will play. Commit-reveal and turn play arrive in Phase 5 of
+> [TASKS.md](TASKS.md).
 
 ---
 
@@ -238,17 +240,51 @@ verifier, and no live component ever sees both sides. Neither peer's
 `LocalState` has a field for the opponent's position — see
 [the state model](docs/ARCHITECTURE.md#311-the-state-model-why-localstate-cannot-represent-global-truth).
 
-## Running the game
+## Running two peers
 
-Not yet applicable — networking begins in Phase 2. Once it lands:
+Phase 2 implements the transport: each peer is an independent process running
+its own FastMCP server *and* client, and the two talk directly to each other —
+no central referee, no shared state. Terminal 1:
 
 ```bash
-python -m police_thief peer --role police
+python -m police_thief.peer.run --shared config/game.json --private config/cop.toml.example --game-id local-dev
+```
+
+Terminal 2:
+
+```bash
+python -m police_thief.peer.run --shared config/game.json --private config/thief.toml.example --game-id local-dev
+```
+
+Either may start first; each polls for the other. They exchange hello and
+capabilities, compare `config_sha256`, and both reach `READY`:
+
+```
+peer police
+  config_sha256  410066bf…fd0a24d
+  handshake      OK
+  state          ready
+```
+
+If the hashes differ, **both sides refuse to play** and exit non-zero — a
+mismatched constitution means the two peers would be running different physics
+(E-11). Turn play arrives with commit-reveal in Phase 5.
+
+One-command demonstration (launches both processes, then gets out of the way):
+
+```bash
+python scripts/run_two_peers.py
 ```
 
 ```bash
-python -m police_thief peer --role thief
+python scripts/run_two_peers.py --stagger 5   # thief starts 5s late
 ```
+
+Operational events go to `logs/peer_<role>_<game-id>.jsonl` — telemetry only,
+not the cryptographic match log, and it structurally refuses to record secrets
+or any opponent position.
+
+## Replay (later phase)
 
 ```bash
 python -m police_thief replay --log matches/<game_id>/log_<game_id>_g01.json

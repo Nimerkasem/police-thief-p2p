@@ -15,9 +15,10 @@ verification procedure. Rule IDs are Appendix E's own numbering
 **Naming convention** (D-17): test functions carry the rule ID, e.g.
 `test_e13_rejects_diagonal_move`, so coverage is greppable.
 
-**Implementation status.** Phases 0 (configuration) and 1 (game domain) are
-implemented; the names in `§9` and `§10` are real and runnable. Everything else
-remains a specification for the phase that will implement it.
+**Implementation status.** Phases 0 (configuration), 1 (game domain) and 2
+(transport and handshake) are implemented; the names in `§9`–`§11` are real and
+runnable. Everything else remains a specification for the phase that will
+implement it.
 
 ```bash
 python -m pytest
@@ -139,6 +140,50 @@ python -m pytest
 | The run is reproducible | `test_headless_sim.py::test_the_run_is_reproducible`, `::test_headless_cli_is_deterministic` | `AUTO` |
 | Role states remain separate objects | `test_headless_sim.py::test_states_remain_separate_objects` | `AUTO` |
 | Correct final score on capture | `test_headless_sim.py::test_capture_scores_the_configured_amounts` | `AUTO` |
+
+---
+
+## 11. Implemented — Phase 2 transport and handshake
+
+331 tests under `tests/protocol/` and `tests/peer/`. Real-process integration
+is demonstrated by `scripts/run_two_peers.py` (READY, delayed start, config
+mismatch, peer unavailable) rather than by pytest, since it requires two OS
+processes and real sockets.
+
+| Requirement | Test | Class |
+|---|---|---|
+| Valid envelope round-trips | `test_messages.py::test_valid_message_round_trips` | `AUTO` |
+| Closed envelope schema — every key required, none extra | `test_messages.py::test_missing_envelope_field_is_rejected` (×10), `::test_unknown_envelope_field_is_rejected` | `AUTO` |
+| Unsupported schema / protocol versions rejected | `test_messages.py::test_unsupported_schema_version_is_rejected`, `::test_incompatible_protocol_version_is_rejected`, `::test_minor_protocol_differences_are_compatible` | `AUTO` |
+| Unknown message type / role rejected | `test_messages.py::test_unknown_message_type_is_rejected`, `::test_unknown_role_is_rejected` | `AUTO` |
+| Closed payload schemas per type | `test_messages.py::test_unknown_payload_field_is_rejected`, `::test_missing_payload_field_is_rejected`, `::test_wrong_payload_type_is_rejected` | `AUTO` |
+| Deterministic canonical encoding; single serialiser | `test_codec.py::test_encoding_is_deterministic`, `::test_encoding_is_canonical_sorted_and_compact`, `::test_codec_uses_the_single_canonical_implementation` | `AUTO` |
+| Malformed JSON / UTF-8 rejected; no pickle/eval | `test_codec.py::test_malformed_json_is_rejected`, `::test_non_utf8_is_rejected`, `::test_codec_does_not_deserialise_arbitrary_objects` | `AUTO` |
+| **E-29** bounded message size, checked before parsing | `test_codec.py::test_oversized_message_is_rejected_before_parsing`, `::test_oversized_encode_is_rejected` | `AUTO` |
+| Action codec: MOVE/STAY/PLACE_BARRIER round-trip, versioned, role-free, closed | `test_action_codec.py` (16 tests incl. `::test_codec_accepts_no_hidden_state_field`) | `AUTO` |
+| **E-4** every declared transition accepted | `test_states.py::test_every_declared_transition_is_accepted` (×37) | `AUTO` |
+| **E-5** every undeclared transition rejected, state unchanged | `test_states.py::test_every_undeclared_transition_is_rejected` (×119) | `AUTO` |
+| Terminal-state immutability; idempotent re-entry; deterministic history | `test_states.py::test_terminal_state_is_immutable`, `::test_repeating_a_transition_is_idempotent_and_does_not_duplicate_history`, `::test_transition_log_is_deterministic_and_timestamped` | `AUTO` |
+| No direct state assignment | `test_states.py::test_state_cannot_be_assigned_from_outside` | `AUTO` |
+| **E-11** matching hash accepted; both peers agree | `test_orchestrator.py::test_both_peers_reach_ready`, `::test_both_peers_agree_on_the_config_hash` | `AUTO` |
+| **E-11** mismatching hash refused; no turns begin | `test_orchestrator.py::test_config_mismatch_is_rejected_and_no_turns_begin`; real-process demo | `AUTO` + `MANUAL` |
+| Wrong game id / same-role sender / wrong receiver rejected | `test_orchestrator.py::test_wrong_game_id_is_rejected`, `::test_same_role_opponent_is_rejected`, `::test_message_addressed_elsewhere_is_rejected` | `AUTO` |
+| Missing mandatory capability rejected | `test_orchestrator.py::test_missing_mandatory_capability_is_rejected` | `AUTO` |
+| Exact duplicate → same acknowledgement; conflict → rejected | `test_orchestrator.py::test_exact_duplicate_returns_the_same_acknowledgement`, `::test_conflicting_duplicate_is_rejected`; unit detail in `test_registry.py` (11 tests) | `AUTO` |
+| Registry bounded at `queue_depth`; eviction policy | `test_registry.py::test_registry_is_bounded_and_evicts_oldest_first`, `::test_memory_stays_bounded_under_sustained_load`, `::test_capacity_comes_from_queue_depth` | `AUTO` |
+| **E-28** rate limit, concurrency, queue capacity enforced; slot released on exception; fake-clock refill | `test_gatekeeper_and_deadline.py` (12 gatekeeper tests) | `AUTO` |
+| **E-6** deadline; bounded retry; backoff; non-retryable not retried; cancellation | `test_gatekeeper_and_deadline.py` (7 deadline tests) | `AUTO` |
+| **E-7** watchdog fires once after configured silence | `test_gatekeeper_and_deadline.py` (5 watchdog tests) | `AUTO` |
+| Orchestrator lifecycle: READY, failed handshake, unavailable peer, clean shutdown | `test_orchestrator.py` (remaining), `test_server_and_client.py::test_real_client_completes_a_handshake_over_in_memory_transport` | `AUTO` |
+| Retries preserve the message id | `test_server_and_client.py::test_retries_preserve_the_message_id` | `AUTO` |
+| Server never mutates LocalState | `test_server_and_client.py::test_server_never_mutates_local_state` | `AUTO` |
+| **E-9** no wire schema carries a position; none can be smuggled | `test_information_boundary.py::test_no_payload_schema_accepts_a_position`, `::test_a_position_cannot_be_smuggled_into_any_payload` (×9) | `AUTO` |
+| **E-9** handshake bytes inspected; LocalState untouched | `test_information_boundary.py::test_no_handshake_message_carries_game_information`, `::test_handshake_does_not_change_local_state` | `AUTO` |
+| **E-3** transport imports no game logic; orchestrator no strategy/scoring | `test_information_boundary.py::test_transport_layer_does_not_import_game_logic`, `::test_orchestrator_does_not_import_strategy_or_scoring` | `AUTO` |
+| No central referee: nothing outside sim/ holds both states | `test_information_boundary.py::test_no_module_holds_both_peers_states`, `::test_capture_takes_positions_as_parameters_not_stored_state` | `AUTO` |
+| Private config never transmitted; hash unaffected by it | `test_information_boundary.py::test_private_configuration_is_never_transmitted`, `::test_private_config_does_not_affect_the_config_hash` | `AUTO` |
+| **E-39/E-9** event sink refuses secrets and positions, at depth | `test_information_boundary.py::test_event_sink_refuses_to_log_a_secret`, `::test_event_sink_refuses_to_log_an_opponent_position`, `::test_event_sink_checks_nested_structures` | `AUTO` |
+| Two real processes reach READY; delayed start; mismatch; unavailable; clean shutdown | `scripts/run_two_peers.py` runs, recorded in COMPLIANCE evidence | `MANUAL` |
 
 ---
 
