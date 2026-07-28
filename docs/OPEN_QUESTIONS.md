@@ -355,23 +355,44 @@ separate email.
 
 ---
 
-## Q-20 — Two-process turn-synchronisation race
+## Q-20 — Two-process turn tolerance (fixed) and transport stalls (open)
 
-**Status: KNOWN LIMITATION (ours).** *Surfaced in Phase 8.*
+**Status: PARTLY FIXED. The remaining half is a transport problem, not a
+protocol one.**
 
-In a real two-process run, one peer can start turn N+1 while the other is still
-finishing turn N, and the early commit is refused with `FutureTurnError`. It
-shows up from about turn 3 and is timing-sensitive -- short runs complete
-cleanly, longer ones do not.
+**Fixed.** A peer may now be exactly one turn ahead. A commit or reveal for the
+next turn is buffered, acknowledged, and replayed into the ordinary handler once
+the local turn advances -- so ordering is unchanged and only the rejection is
+gone. Two turns ahead, stale turns, conflicting duplicates and buffer overflow
+are all still refused. Verified by 21 tests and visible in a real run
+(`future_message_buffered` then `buffered_message_processed`).
 
-Not caused by the hint layer: the same turn sequence runs to 8 turns in-process
-without error, and the hints, intents and trust updates are all correct there.
-The peers are genuinely simultaneous, so one being a beat ahead is normal and
-the receiver should buffer an early commit rather than reject it. That is a
-receiver-side tolerance change, not a change to commit-reveal semantics, and it
-is deliberately not being made under time pressure at the end of a phase.
+**Still open, and the actual root cause.** `FutureTurnError` was a *symptom*.
+With buffering in place the same games now fail with `PeerTimeoutError` on the
+HTTP call itself, several turns in -- the request never completes rather than
+being rejected. Three client configurations were measured:
 
-Related to Q-19, which is the same shape of problem under `--gui`.
+| Configuration | Result |
+|---|---|
+| Fresh `Client` per message | fails on turn 1 |
+| Shared session, unguarded | fails around turn 3-5 |
+| **Shared session + lock** (current) | fails around turn 5-8 |
+
+So a shared MCP session with serialised access is the best of the three and is
+what ships, but none survives a full game. Both peers call each other at the
+same instant during commit and reveal, and that bidirectional simultaneous
+traffic is what the transport does not tolerate.
+
+This is the same shape as Q-19 and almost certainly the same underlying fault.
+Short runs complete cleanly and audit correctly; in-process runs of the identical
+turn sequence reach 35 turns without error, so the protocol, crypto and strategy
+layers are not implicated -- it is specifically FastMCP-over-HTTP under
+concurrent bidirectional calls.
+
+Next thing to try, not attempted here: give each direction its own transport
+(separate client sessions for outbound versus the server's replies), or move the
+turn exchange to a single round trip so the two peers are never calling each
+other at the same moment.
 
 ---
 

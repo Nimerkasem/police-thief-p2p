@@ -37,6 +37,7 @@ from police_thief.crypto.coordinator import CommitRevealCoordinator
 from police_thief.crypto.exceptions import (
     CommitmentMismatchError,
     CryptoTurnTimeoutError,
+    FutureTurnMessageError,
 )
 from police_thief.crypto.sealed import local_state_hash
 from police_thief.domain.actions import Action, PlaceBarrier
@@ -57,6 +58,11 @@ from police_thief.peer.client import PeerClient
 from police_thief.peer.deadline import RetryPolicy, Watchdog
 from police_thief.peer.events import EventSink, NullEventSink
 from police_thief.peer.gatekeeper import Gatekeeper, GatekeeperLimits
+from police_thief.peer.pending import (
+    MAX_TURNS_AHEAD,
+    BufferOverflowError,
+    PendingTurnBuffer,
+)
 from police_thief.peer.registry import MessageRegistry
 from police_thief.peer.states import PeerState, PeerStateMachine
 from police_thief.protocol.exceptions import (
@@ -167,6 +173,10 @@ class PeerOrchestrator:
         directions have completed, or the side that left first is unaudited.
         """
         self._sub_game_opened = False
+        # Holds a message that arrived one turn early. See peer/pending.py.
+        self.pending = PendingTurnBuffer(
+            capacity=self.shared.rate_limiter_gatekeeper.queue_depth
+        )
 
     # ------------------------------------------------------------------
     # Construction helpers
@@ -239,6 +249,11 @@ class PeerOrchestrator:
 
         if kind is MessageType.READY:
             return self._on_ready(envelope)
+
+        if kind in (MessageType.COMMIT, MessageType.REVEAL):
+            early = self._buffer_if_early(envelope)
+            if early is not None:
+                return early
 
         if kind is MessageType.COMMIT:
             return self._on_commit(envelope)
@@ -354,6 +369,108 @@ class PeerOrchestrator:
     # ------------------------------------------------------------------
     # Inbound: the cryptographic turn
     # ------------------------------------------------------------------
+
+    def _expected_turn(self) -> int:
+        """The turn we are on, or the one we are about to start.
+
+        Between turns ``crypto.current`` is ``None`` -- the previous turn has
+        finished and the next has not begun -- which is exactly the window the
+        race falls into. Treating the next turn as expected during that gap is
+        most of the fix.
+        """
+        if self.crypto.current is not None:
+            return self.crypto.current.turn
+        if self.crypto.completed_turns:
+            return max(self.crypto.completed_turns) + 1
+        return 1
+
+    def _buffer_if_early(self, envelope: Envelope) -> Mapping[str, Any] | None:
+        """Hold a message for the next turn, or let it through.
+
+        Returns an acknowledgement when the message is buffered, ``None`` when
+        it should be processed now. Anything stale or more than one turn ahead
+        raises, exactly as before.
+        """
+        turn = envelope.turn_number
+        if turn is None:
+            return None
+
+        expected = self._expected_turn()
+        if turn <= expected:
+            return None  # current or stale -- the normal path decides which
+
+        if turn > expected + MAX_TURNS_AHEAD:
+            self.events.emit(
+                "future_message_rejected",
+                turn=turn,
+                expected=expected,
+                message_type=envelope.message_type.value,
+            )
+            raise FutureTurnMessageError(
+                f"turn {turn} is more than {MAX_TURNS_AHEAD} turn ahead of "
+                f"turn {expected}; a peer that far ahead is playing a "
+                f"different game"
+            )
+
+        try:
+            held = self.pending.lookup(envelope.message_id, envelope.payload)
+        except ConflictingDuplicateError:
+            self.events.emit(
+                "buffer_conflict",
+                turn=turn,
+                message_id=envelope.message_id,
+            )
+            raise
+        if held is not None:
+            return held.response  # exact retry: same acknowledgement
+
+        response = _ok(
+            envelope,
+            MessageType.COMMIT_ACK
+            if envelope.message_type is MessageType.COMMIT
+            else MessageType.REVEAL_ACK,
+            **(
+                {
+                    "commitment": envelope.payload.get("commitment", ""),
+                    "locked": True,
+                }
+                if envelope.message_type is MessageType.COMMIT
+                else {"accepted": True}
+            ),
+        )
+        try:
+            self.pending.add(envelope, response)
+        except BufferOverflowError as exc:
+            self.events.emit("future_message_rejected", turn=turn, reason="overflow")
+            raise InvalidPeerStateError(str(exc)) from exc
+
+        self.events.emit(
+            "future_message_buffered",
+            turn=turn,
+            expected=expected,
+            message_type=envelope.message_type.value,
+            held=len(self.pending),
+        )
+        return response
+
+    async def _drain_pending(self, turn: int) -> None:
+        """Process anything buffered for ``turn``, in a deterministic order.
+
+        Called once the local turn has advanced, so each message now runs
+        through the ordinary handler with its turn genuinely current -- the
+        ordering guarantees are the same ones that applied to a message which
+        arrived on time.
+        """
+        for message in self.pending.take_for_turn(turn):
+            self.events.emit(
+                "buffered_message_processed",
+                turn=turn,
+                message_type=message.envelope.message_type.value,
+            )
+            if message.envelope.message_type is MessageType.COMMIT:
+                self._on_commit(message.envelope)
+            else:
+                self._on_reveal(message.envelope)
 
     def _on_commit(self, envelope: Envelope) -> Mapping[str, Any]:
         """Record the opponent's commitment.
@@ -471,6 +588,11 @@ class PeerOrchestrator:
                 )
             )
             hint, intent = composed.text, composed.intent
+
+        # Anything the opponent sent early for this turn is now due. Drained
+        # before we commit, so a buffered commit is already recorded by the
+        # time we start waiting for it.
+        await self._drain_pending(turn)
 
         # 1. Seal privately. The nonce is created here and never leaves.
         state_hash = local_state_hash(self.state.to_public_dict())
@@ -642,9 +764,16 @@ class PeerOrchestrator:
                 return predicate()
             await self.clock.sleep(interval)
 
+    def _clear_pending(self, why: str) -> None:
+        """Drop buffered messages whose turn will never run."""
+        dropped = self.pending.clear()
+        if dropped:
+            self.events.emit("pending_buffer_cleared", dropped=dropped, reason=why)
+
     def _fail_turn(self, turn: int, detail: str) -> Any:
         """Enter the controlled failure path without leaking the nonce."""
         self.crypto.abandon_turn(detail)
+        self._clear_pending("turn failed")
         self.failure = "turn_failed"
         self.events.emit("turn_failed", turn=turn, detail=detail[:200])
         if self.audit is not None:
@@ -885,6 +1014,8 @@ class PeerOrchestrator:
     async def shutdown(self, reason: str = "normal") -> None:
         """Wind down cleanly from wherever we are."""
         await self.watchdog.stop()
+        # Buffered messages belong to turns that will never run now.
+        self._clear_pending("shutdown")
         if self.machine.is_terminal:
             self.events.emit("shutdown", reason=reason, state=self.machine.state.value)
             return

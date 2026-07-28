@@ -15,6 +15,7 @@ produces the same rejection and spends rate budget for nothing.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any, Mapping
 
@@ -74,6 +75,11 @@ class PeerClient:
         self._clock = clock or SystemClock()
         self._events = events or NullEventSink()
         self._client: Client | None = None
+        # One MCP session, one caller at a time. Both peers call each other at
+        # the same moment during commit and reveal, and overlapping requests on
+        # a shared session stall until the response deadline -- which surfaced
+        # as "opponent commitment never arrived" several turns in.
+        self._lock = asyncio.Lock()
 
     # ------------------------------------------------------------------
     # Raw tool call
@@ -111,8 +117,17 @@ class PeerClient:
         Wrapped by :meth:`_guarded` which adds both.
         """
         try:
-            client = await self._session()
-            result = await client.call_tool(tool, dict(arguments))
+            # One persistent session, one caller at a time.
+            #
+            # Both alternatives were measured and are worse. A fresh Client per
+            # message opens and tears down an MCP session for every call and
+            # fails on turn 1. An unguarded shared session lets the commit and
+            # reveal calls -- which both peers issue at the same moment --
+            # overlap on one session, where they stall until the response
+            # deadline and surface as "opponent commitment never arrived".
+            async with self._lock:
+                client = await self._session()
+                result = await client.call_tool(tool, dict(arguments))
         except ToolError as exc:
             # The tool exists but refused, or does not exist. Not retryable.
             raise InvalidResponseError(
