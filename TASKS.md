@@ -288,7 +288,26 @@ E-6, E-7.
 
 ---
 
-## Phase 6 — Replay verifier `[M]`
+## Phase 6 — Replay verifier `[M]` ✅ COMPLETE
+*18 new tests; 1360 total. Real 35-turn two-process game replays VERIFIED OK,
+reconstructing a capture at turn 30 (cop 20, thief 5).*
+
+- [x] `[M]` `replay/verifier.py` — loads both logs, verifies both chains,
+      matches by game/sub-game/turn, re-hashes every commitment against the
+      revealed nonces in both directions, checks each turn reveal against its
+      final sealed record, re-applies the physics and simultaneity policy, and
+      recomputes the winner and score independently (D-41).
+- [x] `[M]` Four verdicts: VERIFIED OK / TAMPERED / INCOMPLETE / POLICY
+      MISMATCH. Ten tampering cases demonstrated against real logs.
+- [x] `[M]` `replay/viewer.py` — offline board render with both positions,
+      barriers, actions, hints and intent, result and stamp. Live code is
+      asserted never to import it.
+- [x] `[M]` `sub_game_start` / `sub_game_end` records so preconditions and
+      claims are checkable.
+
+**Original plan below.**
+
+## Phase 6 — Replay verifier `[M]` (original)
 
 *Depends on Phase 5. Brought forward from the PDF's stage 7 because it is the
 strongest automated check we have on the crypto layer, and a mandatory

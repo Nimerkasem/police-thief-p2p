@@ -265,6 +265,8 @@ async def _play_turns(orchestrator, args) -> int:
     if not received:
         return EXIT_HANDSHAKE_FAILED
 
+    orchestrator.close_sub_game()
+
     if orchestrator.audit is not None:
         verdict = verify_chain_file(orchestrator.audit.path)
         print(f"  audit chain    {verdict.describe()}")

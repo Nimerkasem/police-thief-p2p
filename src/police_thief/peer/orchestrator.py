@@ -42,6 +42,10 @@ from police_thief.crypto.sealed import local_state_hash
 from police_thief.domain.actions import Action, PlaceBarrier
 from police_thief.domain.enums import Role
 from police_thief.domain.exceptions import DomainError
+from police_thief.domain.simultaneity import (
+    BLOCKED_MOVE_BECOMES_STAY,
+    DEFAULT_SIMULTANEITY_POLICY,
+)
 from police_thief.domain.state import LocalState
 from police_thief.domain.transition import apply_action, observe_barrier
 from police_thief.protocol.action_codec import decode_action, encode_action
@@ -152,6 +156,7 @@ class PeerOrchestrator:
         The audit is *mutual* (E-36): neither peer may leave until both
         directions have completed, or the side that left first is unaudited.
         """
+        self._sub_game_opened = False
 
     # ------------------------------------------------------------------
     # Construction helpers
@@ -437,6 +442,7 @@ class PeerOrchestrator:
         state transition, and the transition table makes the unsafe orderings
         unreachable rather than merely unwise.
         """
+        self.open_sub_game()
         self.machine.transition(PeerState.SELECTING_ACTION, f"turn {turn}")
         if action is None:
             action = self.choose_action()
@@ -785,6 +791,51 @@ class PeerOrchestrator:
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
+
+    def open_sub_game(self) -> None:
+        """Record the preconditions a replay needs to check us against.
+
+        Written once, before any turn. It pins what we claim to have been
+        playing -- which config, which board, which resolution policies -- so an
+        independent verifier can compare the two peers' claims rather than
+        taking either on trust. Without this the logs cannot be told apart from
+        two peers playing different games.
+        """
+        if self.audit is None or self._sub_game_opened:
+            return
+        self._sub_game_opened = True
+        board = self.shared.board_and_agents
+        self.audit.append(
+            AuditEventType.SUB_GAME_START,
+            {
+                "config_sha256": self.config_hash,
+                "grid_size": board.grid_size,
+                "cop_start": list(board.cop_start),
+                "thief_start": list(board.thief_start),
+                "policy": {
+                    "capture": DEFAULT_SIMULTANEITY_POLICY.name,
+                    "blocked_move": BLOCKED_MOVE_BECOMES_STAY,
+                },
+            },
+        )
+
+    def close_sub_game(self, claimed: Mapping[str, Any] | None = None) -> None:
+        """Record what we believe happened.
+
+        A *claim*, not a finding: a live peer cannot compute the winner, having
+        never seen its opponent's position. The replay recomputes the outcome
+        from both logs and contradicts this if it disagrees.
+        """
+        if self.audit is None:
+            return
+        self.audit.append(
+            AuditEventType.SUB_GAME_END,
+            {
+                "turns_played": len(self.crypto.completed_turns),
+                "own_final_position": list(self.state.position.as_tuple()),
+                "claimed": dict(claimed or {}),
+            },
+        )
 
     def mark_server_ready(self, url: str) -> None:
         self.machine.transition(PeerState.STARTING, "starting server")

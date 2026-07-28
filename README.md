@@ -323,11 +323,29 @@ Operational events go to `logs/peer_<role>_<game-id>.jsonl` — telemetry only,
 not the cryptographic match log, and it structurally refuses to record secrets
 or any opponent position.
 
-## Replay (later phase)
+## Replay verification
+
+Reconstruct a finished sub-game from **both** peers' audit logs and decide it
+independently — trusting neither peer's claimed result:
 
 ```bash
-python -m police_thief replay --log matches/<game_id>/log_<game_id>_g01.json
+python -m police_thief.replay.viewer --cop logs/audit_police_full.jsonl --thief logs/audit_thief_full.jsonl
 ```
+
+```
+  turn 30
+    0 1 2 3 4 5 6
+  5 . . . . . C #
+  6 . . . . . # T
+  result        capture (thief_has_no_legal_move) on turn 30
+  winner        police
+  score         cop 20, thief 5
+  verification  VERIFIED OK
+```
+
+Verdicts are `VERIFIED OK`, `TAMPERED`, `INCOMPLETE` or `POLICY MISMATCH`. The
+viewer may show both positions because it runs offline, after the final reveal,
+once the nonces are public; no live component imports it.
 
 The two peers **must** run as two entirely separate processes under separate
 configuration directories. Sharing memory or variables between them breaks the

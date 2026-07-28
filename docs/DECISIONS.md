@@ -812,6 +812,32 @@ is the truthful state, and it must not reinstate a cell we have just ruled out.
 
 ---
 
+## D-41 — Replay trusts neither peer, and says how it failed
+
+**Decision.** Four verdicts, not two: `VERIFIED OK`, `TAMPERED`, `INCOMPLETE`,
+`POLICY MISMATCH`. Peers log a `sub_game_start` (config hash, board, policy
+identifiers) and a `sub_game_end` carrying *claims*; the replay recomputes the
+outcome and contradicts a claim rather than adopting it.
+
+**Why.** A live peer cannot adjudicate — it never sees its opponent's position —
+so it plays to the turn limit and the replay decides where the game actually
+ended. Confirmed in a real run: both peers played 35 turns; the replay found the
+capture at turn 30.
+
+The verdicts are distinct because the failures are: a truncated log is a crash,
+a broken chain is an accusation, and two peers running different resolution
+rules is neither — nobody cheated, they simply were not playing the same game.
+Collapsing those into "invalid" would misattribute blame. The policy check runs
+*before* the config check for the same reason, and the verifier refuses to
+substitute a policy the logs were not produced under (Q-18 stays configurable).
+
+**Cost.** Two extra log records per sub-game. Without them the two logs cannot
+be told apart from two peers playing different games.
+
+*Added in Phase 5.*
+
+---
+
 ## D-17 — One test per mandatory rule, named by rule ID
 
 **Decision.** Test functions carry the rule ID, e.g.
