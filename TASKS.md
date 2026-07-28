@@ -204,7 +204,40 @@ E-25, E-26, E-27.
 
 ---
 
-## Phase 5 — Security and cryptography `[M]`
+## Phase 5 — Security and cryptography `[M]` ✅ COMPLETE
+*(delivered as "Phase 3" in the session sequence; 591 new tests, 1307 total)*
+
+- [x] `[M]` `crypto/sealed.py` — closed ten-key sealed record (D-34),
+      `SHA256(canonical_json_bytes(record))`, versioned schema, `state` as a
+      hash so a position never reaches the wire.
+- [x] `[M]` `crypto/nonce.py` — `secrets.token_hex(16)`, lowercase hex, local
+      reuse guard (D-35).
+- [x] `[M]` `crypto/coordinator.py` — the four PDF phases, duplicate/conflict/
+      replay handling, abandonment that discards the pending nonce, final-reveal
+      verification.
+- [x] `[M]` **E-18 honoured**: the per-turn reveal carries no nonce; all nonces
+      are disclosed only in `FINAL_REVEAL` (D-36). The reveal schema has no
+      nonce field, so omission is structural.
+- [x] `[M]` `audit/` — hash-chained append-only JSONL, explicit genesis, and an
+      independent verifier detecting modification, deletion, insertion,
+      reordering, duplicate ids and malformed lines (D-37).
+- [x] `[M]` Turn states added to the state machine; the only edge into
+      `REVEAL_ALLOWED` is from `BOTH_COMMITS_RECEIVED`, and into `APPLYING_TURN`
+      from `BOTH_REVEALS_VERIFIED`.
+- [x] `[M]` `crypto/stepzero.py` — interface and declaration only. Signing
+      **deliberately unimplemented**; Q-12 remains open and no key scheme was
+      invented.
+- [x] `[M]` Demonstrated with two real processes: 2 crypto turns, mutual audit
+      both directions, chain `Verified OK`; plus tampered action, tampered
+      nonce, opponent unavailable, and offline audit-tamper detection.
+
+**Deferred, correctly:** deadline/watchdog integration was already delivered in
+Phase 2. The capture claim (E-21/E-22) and the two-log game replay (E-20) are
+Phase 6.
+
+---
+
+## Phase 5 — Security and cryptography `[M]` (original plan, superseded above)
 
 *Depends on Phase 4.*
 

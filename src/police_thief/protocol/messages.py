@@ -55,6 +55,29 @@ class MessageType(str, Enum):
     GAME_FINISHED = "game_finished"
     SHUTDOWN = "shutdown"
 
+    # --- Phase 3: the cryptographic turn (Ch. 5, PDF pp. 50-51) ---------
+    COMMIT = "commit"
+    """Carries the digest and nothing else."""
+
+    COMMIT_ACK = "commit_ack"
+    """"Prevents the sender retreating from its commitment, and guarantees the
+    reveal happens only once both sides have fixed their moves" (PDF p. 51)."""
+
+    REVEAL = "reveal"
+    """Action and hint. **No nonce** -- it "remains hidden at this stage"
+    (E-18, PDF p. 51)."""
+
+    REVEAL_ACK = "reveal_ack"
+
+    FINAL_REVEAL = "final_reveal"
+    """All nonces, at end of match: "only at the end of the whole game are all
+    Nonce values revealed, for full mutual audit" (PDF p. 51)."""
+
+    FINAL_REVEAL_ACK = "final_reveal_ack"
+
+    TURN_ABORT = "turn_abort"
+    CRYPTO_ERROR = "crypto_error"
+
 
 ENVELOPE_KEYS: frozenset[str] = frozenset(
     {
@@ -110,7 +133,63 @@ _PAYLOAD_SCHEMAS: dict[MessageType, dict[str, tuple[type | tuple[type, ...], boo
     MessageType.SHUTDOWN: {
         "reason": (str, True),
     },
+    # --- Phase 3 -------------------------------------------------------
+    # COMMIT carries the digest ONLY. No action, no kind, no coordinate, no
+    # nonce, no length hint. The move space is small enough to enumerate, so
+    # anything narrowing it would defeat the commitment.
+    MessageType.COMMIT: {
+        "commitment": (str, True),
+        "commitment_schema": (str, True),
+    },
+    MessageType.COMMIT_ACK: {
+        "commitment": (str, True),
+        "locked": (bool, True),
+    },
+    # REVEAL carries the sealed record WITHOUT its nonce (E-18).
+    MessageType.REVEAL: {
+        "sealed": (dict, True),
+    },
+    MessageType.REVEAL_ACK: {
+        "accepted": (bool, True),
+    },
+    MessageType.FINAL_REVEAL: {
+        "records": (list, True),
+    },
+    MessageType.FINAL_REVEAL_ACK: {
+        "audit": (str, True),
+        "verified_turns": (int, True),
+    },
+    MessageType.TURN_ABORT: {
+        "reason": (str, True),
+    },
+    MessageType.CRYPTO_ERROR: {
+        "code": (str, True),
+        "detail": (str, True),
+    },
 }
+
+CRYPTO_MESSAGE_TYPES: frozenset[MessageType] = frozenset(
+    {
+        MessageType.COMMIT,
+        MessageType.COMMIT_ACK,
+        MessageType.REVEAL,
+        MessageType.REVEAL_ACK,
+        MessageType.FINAL_REVEAL,
+        MessageType.FINAL_REVEAL_ACK,
+        MessageType.TURN_ABORT,
+        MessageType.CRYPTO_ERROR,
+    }
+)
+
+TURN_BEARING_MESSAGE_TYPES: frozenset[MessageType] = frozenset(
+    {
+        MessageType.COMMIT,
+        MessageType.COMMIT_ACK,
+        MessageType.REVEAL,
+        MessageType.REVEAL_ACK,
+    }
+)
+"""Types that must carry a ``turn_number``; validated on ingress."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -320,6 +399,12 @@ def envelope_from_wire(raw: Any) -> Envelope:
             )
         if turn_number < 0:
             raise ProtocolValidationError("turn_number must not be negative")
+
+    if message_type in TURN_BEARING_MESSAGE_TYPES and turn_number is None:
+        raise ProtocolValidationError(
+            f"{message_type.value} must carry a turn_number; a commitment or "
+            f"reveal not bound to a turn could be replayed into another one"
+        )
 
     validate_payload(message_type, raw["payload"])
 

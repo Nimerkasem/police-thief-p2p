@@ -663,6 +663,118 @@ opponent position in a file that later gets shared (E-9).
 
 ---
 
+## D-34 — Sealed-record schema and key spelling
+
+**Decision.** The sealed record is a closed ten-key mapping:
+`{v, game_id, sub_game, turn, role, state, action, hint, intent, nonce}`,
+hashed as `SHA256(canonical_json_bytes(mapping))`. `v = "1.0"`.
+
+**Why.** The *semantic* field set is mandatory — Ch. 5 (PDF pp. 50–51) names
+`State`, `Move`, `Intent`, `Nonce` in the formula and states that the record
+actually sealed also includes the hint, the intent classification, the step
+number and the role, with the sample code adding `sub_game`. The **key
+spelling is prescribed nowhere**, and canonical serialisation makes it
+load-bearing: `sub_game` and `subGame` are different commitments. So the schema
+is versioned and must be agreed with each opponent (extends D-4).
+
+`state` is the SHA-256 of the committing peer's *own* pre-move local state, not
+the state itself. That satisfies the PDF's stated purpose — *"prevents reuse of
+an old commitment in a new context"* — without putting a position on the wire.
+
+Deliberately absent: any timestamp (the PDF requires none, and two clocks would
+break the byte-identity both peers depend on), private config, opponent
+position, board state.
+
+*Added in Phase 3.*
+
+---
+
+## D-35 — Nonce: 128 bits from `secrets`, lowercase hex
+
+**Decision.** `secrets.token_hex(16)` — 32 lowercase hex characters. A local
+`NonceGuard` refuses to issue one twice.
+
+**Why.** The PDF fixes no length; the reference implementation uses
+`token_hex(16)` (PDF p. 52), so this matches it. `secrets` rather than `random`
+because the Mersenne Twister's state is recoverable from its output, and the
+nonce is the only thing standing between a commitment and a lookup table over a
+move space of tens of elements — which is precisely the dictionary attack
+PDF p. 50 says the nonce exists to defeat.
+
+The guard is for *our own bug* (a coordinator reusing a pending record), not for
+collisions: at 128 bits, collision is not a consideration.
+
+*Added in Phase 3.*
+
+---
+
+## D-36 — Nonce disclosed only at the final reveal, per E-18
+
+**Decision.** The per-turn `REVEAL` carries the sealed record **without** the
+nonce; all nonces are disclosed together in a single `FINAL_REVEAL` at the end
+of the match. The reveal message schema has no nonce field at all, so omitting
+it is structural rather than remembered.
+
+**Why.** PDF p. 51 is explicit in both directions: the nonce *"remains hidden at
+this stage"* during reveal, and *"only at the end of the whole game are all
+Nonce values revealed"*. E-18 sanctions disclosure with disqualification.
+
+**This overrides the Phase 3 brief**, which asked for the nonce in the reveal
+payload. The PDF is the authoritative source under this project's own stated
+priority order, and shipping the nonce early would break a mandatory rule. See
+OPEN_QUESTIONS.md Q-16 for the consequence: in-turn reveals are verified for
+*binding*, and the commitment hash is verified at the audit.
+
+*Added in Phase 3.*
+
+---
+
+## D-37 — Audit chain: formula, genesis, and the privacy schedule
+
+**Decision.** Each record hashes as
+`SHA256(canonical_json_bytes(record minus current_event_hash))`, with
+`previous_event_hash` included in that input and a genesis predecessor of 64
+zeros. Append-only JSONL, flushed per line. The writer **raises** rather than
+filters when handed a forbidden key, and permits a nonce only in a
+`final_reveal` record.
+
+**Why.** Excluding the hash from its own input is arithmetic necessity;
+including the predecessor's hash is the whole chain — it is the only reason
+altering record 3 invalidates record 4. An explicit genesis means record 1 is
+verified by the same code path as every other, with no special case.
+
+Raising rather than filtering, because a filtered leak leaves the caller
+believing it recorded something it did not. Restricting nonces to the final
+reveal enforces E-18 in the log as well as on the wire: a log holding a
+commitment *and* its nonce would defeat that commitment for anyone reading the
+file.
+
+*Added in Phase 3.*
+
+---
+
+## D-38 — Commit and reveal sends overlap their waits
+
+**Decision.** A peer starts its `COMMIT` (and later `REVEAL`) send as a task and
+waits for the opponent's concurrently, settling the send afterwards. A send
+whose acknowledgement is lost does not fail the turn if the opponent's own
+message proves progress.
+
+**Why.** Found by the two-process demonstration, not by unit tests. Both peers
+act simultaneously, so if each blocked on its own send before beginning to
+wait, each would hold its event loop inside a request whose answer depends on
+the other making progress — a deadlock invisible to any single-sided test. The
+same run showed the client was opening a fresh MCP session per message, which
+serialised the bidirectional traffic; the client now holds a persistent session
+and closes it on error.
+
+**Cost.** Slightly more intricate turn code. Justified: this is the class of bug
+that only appears between two real processes, which is where the league runs.
+
+*Added in Phase 3.*
+
+---
+
 ## D-17 — One test per mandatory rule, named by rule ID
 
 **Decision.** Test functions carry the rule ID, e.g.

@@ -73,10 +73,35 @@ class PeerClient:
         self._policy = retry_policy
         self._clock = clock or SystemClock()
         self._events = events or NullEventSink()
+        self._client: Client | None = None
 
     # ------------------------------------------------------------------
     # Raw tool call
     # ------------------------------------------------------------------
+
+    async def _session(self) -> Client:
+        """Return a live client, connecting once and reusing it.
+
+        A fresh ``Client`` per message would open and tear down an MCP session
+        for every call (POST, GET, DELETE each time). Beyond being wasteful,
+        that serialises traffic badly when both peers call each other at the
+        same moment -- which is exactly what the commit and reveal phases do.
+        """
+        if self._client is None:
+            client = Client(self._transport)
+            await client.__aenter__()
+            self._client = client
+        return self._client
+
+    async def aclose(self) -> None:
+        """Close the persistent session, if one is open."""
+        client, self._client = self._client, None
+        if client is not None:
+            try:
+                await client.__aexit__(None, None, None)
+            except Exception:
+                # Teardown must not raise during shutdown.
+                pass
 
     async def _call_tool_once(
         self, tool: str, arguments: Mapping[str, Any]
@@ -86,18 +111,20 @@ class PeerClient:
         Wrapped by :meth:`_guarded` which adds both.
         """
         try:
-            async with Client(self._transport) as client:
-                result = await client.call_tool(tool, dict(arguments))
+            client = await self._session()
+            result = await client.call_tool(tool, dict(arguments))
         except ToolError as exc:
             # The tool exists but refused, or does not exist. Not retryable.
             raise InvalidResponseError(
                 f"tool {tool!r} rejected the call: {exc}"
             ) from exc
         except (ConnectionError, OSError) as exc:
+            await self.aclose()  # a broken session must not be reused
             raise PeerUnavailableError(
                 f"could not reach the opponent: {type(exc).__name__}: {exc}"
             ) from exc
         except Exception as exc:
+            await self.aclose()
             # httpx and anyio raise their own families; treat an unrecognised
             # transport failure as "peer unreachable" and let the bounded retry
             # decide, rather than crashing the peer.

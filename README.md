@@ -11,13 +11,13 @@ verbal hint that may well be a lie. Integrity between two mutually distrustful
 peers is guaranteed not by trust but by mathematics — commit-reveal over
 SHA-256, audited after the fact.
 
-> **Status: Phases 0–2 complete** (716 tests). Configuration reduces every
-> binding parameter to one policy table and one hash; the game domain
-> implements board, movement, barriers, capture, terminal conditions and
-> scoring; and two independent peer processes now handshake over FastMCP —
-> each a server and client at once — verifying identical configuration hashes
-> before either will play. Commit-reveal and turn play arrive in Phase 5 of
-> [TASKS.md](TASKS.md).
+> **Status: configuration, game domain, transport and cryptography complete**
+> (1307 tests). Two independent peer processes handshake over FastMCP, verify
+> identical configuration hashes, and play **cryptographically committed
+> turns**: neither sees the other's action before committing, neither can
+> change it afterwards, and every event is written to a hash-chained
+> tamper-evident log that an independent verifier checks. Remaining: scent,
+> belief maps, strategy, GUI, replay viewer, Gmail — see [TASKS.md](TASKS.md).
 
 ---
 
@@ -270,7 +270,46 @@ If the hashes differ, **both sides refuse to play** and exit non-zero — a
 mismatched constitution means the two peers would be running different physics
 (E-11). Turn play arrives with commit-reveal in Phase 5.
 
-One-command demonstration (launches both processes, then gets out of the way):
+## Playing cryptographic turns
+
+Add `--turns N` to play N commit-reveal turns after the handshake, then
+exchange final reveals and audit each other:
+
+```bash
+python -m police_thief.peer.run --shared config/game.json --private config/cop.toml.example --game-id demo --turns 2
+```
+
+```
+  turn 1         commit 37c836fcbb4033a6… | opponent revealed MOVE:STAY
+  turn 2         commit 81d9a3dfeb3db685… | opponent revealed MOVE:STAY
+  final reveal   opponent verified 2 turn(s)
+  mutual audit   both directions verified
+  audit chain    Verified OK (12 records)
+```
+
+The commit carries **only** a SHA-256 digest — no action, no target, no nonce.
+The reveal carries the action and hint but still **not** the nonce, which stays
+secret until the end of the match, exactly as the specification requires. That
+is why tampering is caught at the final audit rather than mid-turn.
+
+To see the detection work, corrupt your own record after committing:
+
+```bash
+python -m police_thief.peer.run --shared config/game.json --private config/cop.toml.example --game-id t --turns 1 --tamper action
+```
+
+The opponent rejects the final reveal with `CommitmentMismatchError` and both
+peers exit non-zero.
+
+Audit logs are written to `logs/audit_<role>_<game-id>.jsonl` and can be
+verified independently at any time:
+
+```bash
+python -c "from police_thief.audit.verifier import verify_chain_file; print(verify_chain_file('logs/audit_police_demo.jsonl').describe())"
+```
+
+One-command handshake demonstration (launches both processes, then gets out of
+the way):
 
 ```bash
 python scripts/run_two_peers.py

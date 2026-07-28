@@ -2,13 +2,13 @@
 
 The minimum FastMCP tool interface and wire contract between two peers.
 
-> **Implementation status (Phase 2).** The handshake layer is implemented and
-> running between two real processes: envelope schema, codec, config-hash
-> exchange, readiness, duplicate handling, retry/timeout behaviour and the
-> state machine. §0 below documents the implemented Phase 2 wire format, which
-> supersedes the sketches in §§2–4 for the messages it covers. Turn messages,
-> commit-reveal and the capture claim (§§5–6) remain design, implemented in
-> Phase 5. Built against **fastmcp 3.4.5**.
+> **Implementation status (Phases 2–3).** Handshake *and* the cryptographic
+> turn are implemented and running between two real processes: envelope schema,
+> codec, config-hash exchange, commit → acknowledge → reveal → final-reveal
+> audit, hash-chained audit logging, duplicate handling, retry/timeout, and the
+> full state machine. §0 documents the implemented wire format and supersedes
+> the sketches in §§2–6 for the messages it covers. Still design-only: the
+> capture claim, and the two-log game replay. Built against **fastmcp 3.4.5**.
 
 ---
 
@@ -99,6 +99,94 @@ two-process run: both exit 1, state `error`, no turn is ever attempted).
   `DISCONNECTED`, controlled wind-down. Connection loss is an operational
   failure, not a self-declared game outcome (D-32).
 
+### 0.7 The cryptographic turn (implemented, Phase 3)
+
+**Sealed record** — closed schema, versioned, agreed with the opponent (D-34):
+
+```jsonc
+{
+  "v": "1.0",
+  "game_id": "…", "sub_game": 1, "turn": 7, "role": "police",
+  "state":  "<sha256 of the committer's OWN pre-move local state>",
+  "action": {"v":1, "kind":"move", "direction":"N"},
+  "hint":   "…", "intent": "truth",          // "truth" | "lie"
+  "nonce":  "<32 lowercase hex, secrets.token_hex(16)>"
+}
+```
+
+No timestamp (two clocks would break byte-identity), no private config, no
+opponent position, no board state. `state` is a *hash*, so it binds the
+commitment to a position without disclosing one.
+
+**Commitment formula:**
+
+```
+commitment = SHA256( canonical_json_bytes(sealed_record) )   // 64 lowercase hex
+```
+
+Same canonical helper as the config hash and every other digest in the project.
+
+**Message sequence** — the PDF's four phases (Ch. 5, pp. 50–51):
+
+```
+A                                                    B
+│── COMMIT {commitment}          ─────────────────► │   digest only
+│ ◄───────────────── COMMIT_ACK {locked:true} ──────│   "prevents retreating"
+│                    …both must have committed…      │
+│── REVEAL {sealed WITHOUT nonce} ────────────────► │   action + hint only
+│ ◄───────────────── REVEAL_ACK  ───────────────────│
+│                    …repeat per turn…               │
+│── FINAL_REVEAL {records with nonces} ───────────► │   end of match ONLY
+│ ◄──── FINAL_REVEAL_ACK {audit:"OK", turns:N} ─────│   SHA-256 recomputed here
+```
+
+**The nonce is not in the per-turn reveal** (E-18, D-36). Consequently an
+in-turn reveal is verified for *binding* — schema, game, sub-game, turn, role,
+prior commitment, structural validity — while the *commitment* is verified at
+the final reveal. See OPEN_QUESTIONS.md Q-16.
+
+**Duplicate and replay handling:** exact duplicate commit/reveal is idempotent;
+a *different* commitment or reveal for the same role and turn fails the turn
+(a decision cannot be changed once made); a reveal with no prior commitment, or
+for a stale or future turn, or claiming the wrong game/sub-game/role, is
+rejected. `COMMIT`/`REVEAL` must carry a `turn_number` or the envelope is
+rejected — a commitment unbound to a turn could be replayed into another.
+
+**Timeouts:** each wait is bounded by `response_timeout_sec`; sends are bounded
+by `max_retries` with `retry_backoff_sec`; failure enters `TURN_FAILED` and the
+pending nonce is discarded, never logged and never reused.
+
+### 0.8 Audit log (implemented, Phase 3)
+
+Append-only JSONL, one record per line, hash-chained. **Distinct from the
+operational log** of §0.5 — that is telemetry; this is evidence.
+
+```jsonc
+{
+  "schema_version": "1.0", "event_id": "<uuid>",
+  "game_id": "…", "role": "police", "sub_game": 1, "turn_number": 7,
+  "event_type": "local_commit",          // closed set
+  "timestamp": "…",
+  "previous_event_hash": "<64 hex, genesis = 0*64>",
+  "current_event_hash":  "<64 hex>",
+  "payload": { … }
+}
+```
+
+```
+current_event_hash = SHA256( canonical_json_bytes(record WITHOUT current_event_hash) )
+```
+
+`previous_event_hash` is inside that input — that inclusion *is* the chain.
+The verifier recomputes from genesis and detects modification, deletion,
+insertion, reordering, duplicate event ids and malformed lines, reporting the
+first failure. Demonstrated against real logs.
+
+**Privacy schedule.** Before a reveal the log holds commitments, message ids and
+protocol state — never the action, its target, or any nonce. Nonces appear in
+**exactly one** record type, `final_reveal`. The writer raises rather than
+filters, so a mistake surfaces where it was made.
+
 ### 0.6 Peer lifecycle states (implemented)
 
 ```
@@ -107,10 +195,26 @@ CREATED → STARTING → SERVER_READY → CONNECTING → HELLO_EXCHANGE
         → FINISHING → FINISHED
 ```
 
+Phase 3 adds the turn cycle, reachable from `READY` and repeatable:
+
+```
+READY → SELECTING_ACTION → LOCAL_ACTION_SEALED → WAITING_FOR_OPPONENT_COMMIT
+      → BOTH_COMMITS_RECEIVED → REVEAL_ALLOWED → LOCAL_REVEAL_SENT
+      → WAITING_FOR_OPPONENT_REVEAL → VERIFYING_REVEAL → BOTH_REVEALS_VERIFIED
+      → APPLYING_TURN → TURN_COMPLETE ─┬─► SELECTING_ACTION  (next turn)
+                                       └─► FINISHING
+```
+
+The ordering is the safety property, not documentation of one: **the only edge
+into `REVEAL_ALLOWED` comes from `BOTH_COMMITS_RECEIVED`**, and the only edge
+into `APPLYING_TURN` comes from `BOTH_REVEALS_VERIFIED`. "No reveal before both
+commitments" and "nothing applied before verification" are therefore
+unreachable-by-construction rather than checks someone could forget.
+`TURN_FAILED` is the controlled failure path from every turn state.
+
 `ERROR` (terminal) is reachable from every non-terminal state; `DISCONNECTED`
 is **not** terminal — it allows the controlled wind-down `→ FINISHING →
-FINISHED`. Illegal transitions raise and leave the state unchanged. Turn states
-arrive in Phase 5.
+FINISHED`. Illegal transitions raise and leave the state unchanged.
 
 Design constraints from [REQUIREMENTS.md](REQUIREMENTS.md): symmetric peers, no
 central referee, commit-reveal over SHA-256 with the nonce hidden until end of

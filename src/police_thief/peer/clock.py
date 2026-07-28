@@ -60,5 +60,14 @@ class FakeClock:
         self._now += seconds
 
     async def sleep(self, seconds: float) -> None:
+        """Advance virtual time, and yield to the event loop.
+
+        The yield matters as much as the advance. Without it, a coroutine
+        waiting on a fake clock spins without ever letting its counterpart run,
+        so two peers driven concurrently deadlock in the test even though the
+        real thing works. ``asyncio.sleep(0)`` reschedules without consuming
+        real time.
+        """
         self.sleeps.append(seconds)
         self.advance(seconds)
+        await asyncio.sleep(0)

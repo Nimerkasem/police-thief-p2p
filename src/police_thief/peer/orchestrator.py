@@ -26,13 +26,23 @@ receives one for the other. Asserted by
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field  # noqa: F401
 from typing import Any, Callable, Mapping
 
+from police_thief.audit.records import AuditEventType
+from police_thief.audit.writer import AuditLog
 from police_thief.config.hashing import config_sha256
 from police_thief.config.models import PrivateConfig, SharedConfig
+from police_thief.crypto.coordinator import CommitRevealCoordinator
+from police_thief.crypto.exceptions import (
+    CommitmentMismatchError,
+    CryptoTurnTimeoutError,
+)
+from police_thief.crypto.sealed import local_state_hash
+from police_thief.domain.actions import Action
 from police_thief.domain.enums import Role
 from police_thief.domain.state import LocalState
+from police_thief.protocol.action_codec import decode_action, encode_action
 from police_thief.peer.clock import Clock, SystemClock
 from police_thief.peer.client import PeerClient
 from police_thief.peer.deadline import RetryPolicy, Watchdog
@@ -102,6 +112,8 @@ class PeerOrchestrator:
     events: EventSink = field(default_factory=NullEventSink)
     clock: Clock = field(default_factory=SystemClock)
     id_factory: Callable[[], str] = new_message_id
+    audit: AuditLog | None = None
+    """The tamper-evident log. Optional so unit tests need no filesystem."""
 
     def __post_init__(self) -> None:
         self.role: Role = self.private.role
@@ -120,6 +132,16 @@ class PeerOrchestrator:
             clock=self.clock,
         )
         self.failure: str | None = None
+        self.crypto = CommitRevealCoordinator(
+            game_id=self.game_id, role=self.role
+        )
+        self.last_opponent_action: Action | None = None
+        self.opponent_audit_received = False
+        """Set when we have verified the opponent's final reveal.
+
+        The audit is *mutual* (E-36): neither peer may leave until both
+        directions have completed, or the side that left first is unaudited.
+        """
 
     # ------------------------------------------------------------------
     # Construction helpers
@@ -192,6 +214,27 @@ class PeerOrchestrator:
 
         if kind is MessageType.READY:
             return self._on_ready(envelope)
+
+        if kind is MessageType.COMMIT:
+            return self._on_commit(envelope)
+
+        if kind is MessageType.REVEAL:
+            return self._on_reveal(envelope)
+
+        if kind is MessageType.FINAL_REVEAL:
+            return self._on_final_reveal(envelope)
+
+        if kind is MessageType.TURN_ABORT:
+            self.crypto.abandon_turn("opponent aborted")
+            self.events.emit(
+                "turn_aborted",
+                reason=str(envelope.payload.get("reason", ""))[:200],
+            )
+            return _ok(
+                envelope,
+                MessageType.ACK,
+                acknowledged_message_id=envelope.message_id,
+            )
 
         if kind in (MessageType.GAME_FINISHED, MessageType.SHUTDOWN):
             self.events.emit(
@@ -284,11 +327,281 @@ class PeerOrchestrator:
         )
 
     # ------------------------------------------------------------------
+    # Inbound: the cryptographic turn
+    # ------------------------------------------------------------------
+
+    def _on_commit(self, envelope: Envelope) -> Mapping[str, Any]:
+        """Record the opponent's commitment.
+
+        Only the digest arrives. Nothing here learns anything about the move --
+        which is the point of the phase.
+        """
+        turn = envelope.turn_number
+        commitment = envelope.payload["commitment"]
+        self.crypto.begin_turn(turn)
+        is_new = self.crypto.record_opponent_commit(turn, commitment)
+
+        if self.audit is not None:
+            self.audit.append(
+                AuditEventType.OPPONENT_COMMIT,
+                {"commitment": commitment, "message_id": envelope.message_id},
+                turn_number=turn,
+            )
+        self.events.emit(
+            "opponent_commit",
+            turn=turn,
+            commitment=commitment[:16],
+            first_time=is_new,
+        )
+        return _ok(
+            envelope, MessageType.COMMIT_ACK, commitment=commitment, locked=True
+        )
+
+    def _on_reveal(self, envelope: Envelope) -> Mapping[str, Any]:
+        """Accept the opponent's revealed action.
+
+        Binding is checked, not the hash: without the nonce there is nothing to
+        recompute yet (E-18). The commitment is verified at the final audit.
+        """
+        turn = envelope.turn_number
+        sealed = envelope.payload["sealed"]
+        action = self.crypto.accept_opponent_reveal(turn, sealed)
+
+        if self.audit is not None:
+            self.audit.append(
+                AuditEventType.OPPONENT_REVEAL,
+                {"sealed": dict(sealed), "message_id": envelope.message_id},
+                turn_number=turn,
+            )
+        self.events.emit("opponent_reveal", turn=turn, action=str(action))
+        self.last_opponent_action = action
+        return _ok(envelope, MessageType.REVEAL_ACK, accepted=True)
+
+    def _on_final_reveal(self, envelope: Envelope) -> Mapping[str, Any]:
+        """Verify every opponent commitment now that the nonces are disclosed.
+
+        This is where tampering is caught (Ch. 5, PDF p. 55; E-19).
+        """
+        records = envelope.payload["records"]
+        verified = self.crypto.verify_final_reveal(records)
+
+        if self.audit is not None:
+            self.audit.append(
+                AuditEventType.AUDIT_RESULT,
+                {"result": "verified", "turns": len(verified)},
+            )
+        self.opponent_audit_received = True
+        self.events.emit("audit_passed", turns=len(verified))
+        return _ok(
+            envelope,
+            MessageType.FINAL_REVEAL_ACK,
+            audit="OK",
+            verified_turns=len(verified),
+        )
+
+    # ------------------------------------------------------------------
+    # Outbound: the cryptographic turn
+    # ------------------------------------------------------------------
+
+    async def play_turn(
+        self,
+        turn: int,
+        action: Action,
+        *,
+        hint: str = "",
+        intent: str = "truth",
+    ) -> Action:
+        """Run one full commit-reveal turn. Returns the opponent's action.
+
+        The ordering below is the protocol's safety property. Each step is a
+        state transition, and the transition table makes the unsafe orderings
+        unreachable rather than merely unwise.
+        """
+        self.machine.transition(PeerState.SELECTING_ACTION, f"turn {turn}")
+
+        # 1. Seal privately. The nonce is created here and never leaves.
+        state_hash = local_state_hash(self.state.to_public_dict())
+        commitment = self.crypto.seal(
+            turn=turn,
+            action=action,
+            hint=hint,
+            intent=intent,
+            state_hash=state_hash,
+        )
+        self.machine.transition(PeerState.LOCAL_ACTION_SEALED, "sealed")
+        if self.audit is not None:
+            # The commitment only. Logging the action here would defeat it.
+            self.audit.append(
+                AuditEventType.LOCAL_COMMIT,
+                {"commitment": commitment},
+                turn_number=turn,
+            )
+
+        # 2/3. Send the digest **while** waiting for theirs.
+        #
+        # These must overlap. Both peers act at once, so if each blocked on its
+        # own send before starting to wait, each would be holding its event loop
+        # inside a request whose answer depends on the other making progress --
+        # a deadlock that only shows up between two real processes.
+        self.machine.transition(
+            PeerState.WAITING_FOR_OPPONENT_COMMIT, "commit sent"
+        )
+        sending = asyncio.create_task(
+            self.client.send(
+                self._envelope(
+                    MessageType.COMMIT,
+                    turn_number=turn,
+                    **self.crypto.commit_payload(turn),
+                )
+            )
+        )
+        arrived = await self._await_condition(
+            lambda: self.crypto.reveal_allowed(turn)
+        )
+        reply = await self._settle(sending)
+
+        if reply is not None and not reply.ok:
+            return self._fail_turn(turn, f"commit rejected: {reply.error}")
+        if not arrived and not self.crypto.reveal_allowed(turn):
+            return self._fail_turn(turn, "opponent commitment never arrived")
+        self.machine.transition(PeerState.BOTH_COMMITS_RECEIVED, "both committed")
+        self.machine.transition(PeerState.REVEAL_ALLOWED, "reveal permitted")
+
+        # 4. Reveal the action -- still without the nonce.
+        payload = self.crypto.reveal_payload(turn)
+        self.machine.transition(PeerState.LOCAL_REVEAL_SENT, "reveal sent")
+        if self.audit is not None:
+            self.audit.append(
+                AuditEventType.LOCAL_REVEAL,
+                {"sealed": payload["sealed"]},
+                turn_number=turn,
+            )
+        sending = asyncio.create_task(
+            self.client.send(
+                self._envelope(MessageType.REVEAL, turn_number=turn, **payload)
+            )
+        )
+
+        # 5. Again overlapping: wait for theirs while ours is in flight.
+        self.machine.transition(
+            PeerState.WAITING_FOR_OPPONENT_REVEAL, "awaiting reveal"
+        )
+        arrived = await self._await_condition(
+            lambda: self.crypto.current is not None
+            and self.crypto.current.opponent_reveal is not None
+        )
+        reply = await self._settle(sending)
+
+        if reply is not None and not reply.ok:
+            return self._fail_turn(turn, f"reveal rejected: {reply.error}")
+        if not arrived:
+            return self._fail_turn(turn, "opponent reveal never arrived")
+
+        self.machine.transition(PeerState.VERIFYING_REVEAL, "verifying")
+        crypto_turn = self.crypto.current
+        if crypto_turn is None or crypto_turn.opponent_reveal is None:
+            return self._fail_turn(turn, "opponent reveal never arrived")
+
+        opponent_action = decode_action(crypto_turn.opponent_reveal["action"])
+        self.machine.transition(PeerState.BOTH_REVEALS_VERIFIED, "verified")
+
+        # 6. Only now may anything be applied.
+        self.machine.transition(PeerState.APPLYING_TURN, "applying")
+        self.crypto.finish_turn(turn)
+        self.machine.transition(PeerState.TURN_COMPLETE, "turn complete")
+
+        if self.audit is not None:
+            self.audit.append(
+                AuditEventType.TURN_APPLIED,
+                {"opponent_action": encode_action(opponent_action)},
+                turn_number=turn,
+            )
+        self.events.emit("turn_complete", turn=turn)
+        return opponent_action
+
+    async def _settle(self, task: "asyncio.Task[Any]") -> Any:
+        """Collect an in-flight send without letting its failure mask progress.
+
+        If our message reached the opponent but its acknowledgement did not come
+        back, the turn has still progressed -- the opponent's own message proves
+        it. Returning ``None`` lets the caller judge on what actually arrived
+        rather than on a lost receipt.
+        """
+        try:
+            return await task
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.events.emit("send_unacknowledged", error=type(exc).__name__)
+            return None
+
+    async def _await_condition(
+        self, predicate: Callable[[], bool]
+    ) -> bool:
+        """Wait for an inbound fact, bounded.
+
+        Bounded because an unbounded wait for the opponent is the deadlock
+        Ch. 8 (PDF p. 79) exists to prevent: "the system does not get stuck
+        waiting forever but moves in a controlled way". The per-attempt
+        interval is derived from ``response_timeout_sec`` so the total wait
+        respects the configured deadline rather than inventing one.
+        """
+        deadline = (
+            self.clock.monotonic()
+            + self.shared.network_and_league.response_timeout_sec
+        )
+        interval = 0.02
+        while True:
+            if predicate():
+                return True
+            if self.clock.monotonic() >= deadline:
+                return predicate()
+            await self.clock.sleep(interval)
+
+    def _fail_turn(self, turn: int, detail: str) -> Any:
+        """Enter the controlled failure path without leaking the nonce."""
+        self.crypto.abandon_turn(detail)
+        self.failure = "turn_failed"
+        self.events.emit("turn_failed", turn=turn, detail=detail[:200])
+        if self.audit is not None:
+            self.audit.append(
+                AuditEventType.TURN_FAILED,
+                {"detail": detail[:200]},
+                turn_number=turn,
+            )
+        if not self.machine.is_terminal:
+            try:
+                self.machine.transition(PeerState.TURN_FAILED, detail[:60])
+            except InvalidPeerStateError:
+                self.machine.transition(PeerState.ERROR, detail[:60])
+        raise CryptoTurnTimeoutError(f"turn {turn} failed: {detail}")
+
+    async def send_final_reveal(self) -> int:
+        """Disclose all our nonces and let the opponent audit us (E-18)."""
+        payload = self.crypto.final_reveal_payload()
+        if self.audit is not None:
+            self.audit.append(
+                AuditEventType.FINAL_REVEAL, payload  # the one nonce-bearing event
+            )
+        reply = await self.client.send(
+            self._envelope(MessageType.FINAL_REVEAL, **payload)
+        )
+        if not reply.ok or reply.envelope is None:
+            raise CommitmentMismatchError(
+                f"the opponent rejected our final reveal: {reply.error}"
+            )
+        return int(reply.envelope.payload.get("verified_turns", 0))
+
+    # ------------------------------------------------------------------
     # Outbound: the handshake we drive
     # ------------------------------------------------------------------
 
     def _envelope(
-        self, message_type: MessageType, **payload: Any
+        self,
+        message_type: MessageType,
+        *,
+        turn_number: int | None = None,
+        **payload: Any,
     ) -> Envelope:
         return new_envelope(
             game_id=self.game_id,
@@ -296,6 +609,7 @@ class PeerOrchestrator:
             receiver_role=self.opponent_role,
             message_type=message_type,
             payload=payload,
+            turn_number=turn_number,
             message_id=self.id_factory(),
         )
 

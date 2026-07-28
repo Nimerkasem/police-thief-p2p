@@ -6,10 +6,11 @@ state** -- so a rejected event leaves the peer exactly where it was. Ch. 8
 rather than leave the system in an undefined state, turning a silent
 in-game freeze into a visible development-time error.
 
-Scope note: there are no turn states here. Phase 2 delivers transport and
-handshake; turns require commit-reveal to have any meaning, and a state with no
-transitions in or out would be untestable dead code. ``WAITING_FOR_TURN`` and
-``TURN_IN_PROGRESS`` arrive in Phase 5 alongside the cryptography.
+Phase 3 adds the cryptographic turn states. Their ordering is the protocol's
+safety property, not a convenience: the machine physically cannot reach
+``REVEAL_ALLOWED`` without passing through ``BOTH_COMMITS_RECEIVED``, so
+"reveal only once both sides have fixed their moves" (Ch. 5, PDF p. 51) is
+enforced by the transition table rather than by a check someone could forget.
 """
 
 from __future__ import annotations
@@ -31,6 +32,21 @@ class PeerState(str, Enum):
     CONFIG_VERIFIED = "config_verified"
     READY_WAIT = "ready_wait"
     READY = "ready"
+
+    # --- Phase 3: the cryptographic turn --------------------------------
+    SELECTING_ACTION = "selecting_action"
+    LOCAL_ACTION_SEALED = "local_action_sealed"
+    WAITING_FOR_OPPONENT_COMMIT = "waiting_for_opponent_commit"
+    BOTH_COMMITS_RECEIVED = "both_commits_received"
+    REVEAL_ALLOWED = "reveal_allowed"
+    LOCAL_REVEAL_SENT = "local_reveal_sent"
+    WAITING_FOR_OPPONENT_REVEAL = "waiting_for_opponent_reveal"
+    VERIFYING_REVEAL = "verifying_reveal"
+    BOTH_REVEALS_VERIFIED = "both_reveals_verified"
+    APPLYING_TURN = "applying_turn"
+    TURN_COMPLETE = "turn_complete"
+    TURN_FAILED = "turn_failed"
+
     FINISHING = "finishing"
     FINISHED = "finished"
     ERROR = "error"
@@ -92,8 +108,74 @@ TRANSITIONS: dict[PeerState, frozenset[PeerState]] = {
         }
     ),
     PeerState.READY: frozenset(
-        {PeerState.FINISHING, PeerState.DISCONNECTED, PeerState.ERROR}
+        {
+            PeerState.SELECTING_ACTION,
+            PeerState.FINISHING,
+            PeerState.DISCONNECTED,
+            PeerState.ERROR,
+        }
     ),
+    # --- the cryptographic turn, in mandatory order --------------------
+    PeerState.SELECTING_ACTION: frozenset(
+        {PeerState.LOCAL_ACTION_SEALED, PeerState.TURN_FAILED, PeerState.ERROR}
+    ),
+    PeerState.LOCAL_ACTION_SEALED: frozenset(
+        {
+            PeerState.WAITING_FOR_OPPONENT_COMMIT,
+            PeerState.TURN_FAILED,
+            PeerState.ERROR,
+        }
+    ),
+    PeerState.WAITING_FOR_OPPONENT_COMMIT: frozenset(
+        {
+            PeerState.BOTH_COMMITS_RECEIVED,
+            PeerState.TURN_FAILED,
+            PeerState.DISCONNECTED,
+            PeerState.ERROR,
+        }
+    ),
+    # There is no edge from anywhere else into REVEAL_ALLOWED. That absence is
+    # what enforces "no reveal before both commitments exist" (PDF p. 51).
+    PeerState.BOTH_COMMITS_RECEIVED: frozenset(
+        {PeerState.REVEAL_ALLOWED, PeerState.TURN_FAILED, PeerState.ERROR}
+    ),
+    PeerState.REVEAL_ALLOWED: frozenset(
+        {PeerState.LOCAL_REVEAL_SENT, PeerState.TURN_FAILED, PeerState.ERROR}
+    ),
+    PeerState.LOCAL_REVEAL_SENT: frozenset(
+        {
+            PeerState.WAITING_FOR_OPPONENT_REVEAL,
+            PeerState.TURN_FAILED,
+            PeerState.ERROR,
+        }
+    ),
+    PeerState.WAITING_FOR_OPPONENT_REVEAL: frozenset(
+        {
+            PeerState.VERIFYING_REVEAL,
+            PeerState.TURN_FAILED,
+            PeerState.DISCONNECTED,
+            PeerState.ERROR,
+        }
+    ),
+    PeerState.VERIFYING_REVEAL: frozenset(
+        {PeerState.BOTH_REVEALS_VERIFIED, PeerState.TURN_FAILED, PeerState.ERROR}
+    ),
+    # Nothing reaches APPLYING_TURN except through verification.
+    PeerState.BOTH_REVEALS_VERIFIED: frozenset(
+        {PeerState.APPLYING_TURN, PeerState.TURN_FAILED, PeerState.ERROR}
+    ),
+    PeerState.APPLYING_TURN: frozenset(
+        {PeerState.TURN_COMPLETE, PeerState.TURN_FAILED, PeerState.ERROR}
+    ),
+    PeerState.TURN_COMPLETE: frozenset(
+        {
+            PeerState.SELECTING_ACTION,  # next turn
+            PeerState.FINISHING,
+            PeerState.DISCONNECTED,
+            PeerState.ERROR,
+        }
+    ),
+    PeerState.TURN_FAILED: frozenset({PeerState.FINISHING, PeerState.ERROR}),
     PeerState.FINISHING: frozenset({PeerState.FINISHED, PeerState.ERROR}),
     PeerState.DISCONNECTED: frozenset({PeerState.FINISHING, PeerState.ERROR}),
     PeerState.FINISHED: frozenset(),

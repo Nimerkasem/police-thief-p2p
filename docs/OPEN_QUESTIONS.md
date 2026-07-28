@@ -355,6 +355,41 @@ separate email.
 
 ---
 
+## Q-16 — In-turn reveal cannot be hash-verified (a property, not a defect)
+
+**Status: RESOLVED by the PDF — recorded because it is counter-intuitive.**
+*Raised in Phase 3.*
+
+A natural expectation is that a peer verifies the opponent's commitment when
+the reveal arrives. **It cannot**, and this follows directly from the PDF.
+
+PDF p. 51, on the Reveal step: *"The agent sends the opponent the action (Move)
+and the verbal sentence. **The Nonce remains hidden at this stage**, to prevent
+premature reverse-engineering of the signatures."* And on the final step:
+*"Only at the end of the whole game are all Nonce values revealed, for full
+mutual audit."* E-18 makes nonce secrecy mandatory, sanctioned by
+disqualification.
+
+Since the commitment is `SHA256(… ‖ nonce)`, a peer holding a reveal without the
+nonce has nothing to recompute. So the verification schedule is:
+
+| When | What is checked |
+|---|---|
+| On reveal, in-turn | **Binding**: schema, game id, sub-game, turn, role, prior commitment exists, action structurally valid |
+| At final reveal, end of match | **The commitment itself**: recompute `SHA256(canonical(record))` and compare (E-19, E-36) |
+
+This is why tampering is caught at the audit rather than during play, exactly as
+Ch. 5 (PDF p. 55) describes. It also means an *implementation* that verified
+hashes in-turn would necessarily have shipped the nonce early and broken E-18.
+
+**Consequence to carry forward:** a peer cannot refuse an illegal-looking move
+on cryptographic grounds mid-turn. It can and does reject it on *physics*
+grounds — the opposing agent enforces the rules (PDF p. 38) — and any
+inconsistency between what was revealed and what was committed surfaces at the
+audit, where the sanction is a technical loss.
+
+---
+
 ## Q-15 — May the cop barrier the cell it is standing on?
 
 **Status: NEGOTIATE.** *Discovered in Phase 1.*

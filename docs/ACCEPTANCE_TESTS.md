@@ -15,8 +15,8 @@ verification procedure. Rule IDs are Appendix E's own numbering
 **Naming convention** (D-17): test functions carry the rule ID, e.g.
 `test_e13_rejects_diagonal_move`, so coverage is greppable.
 
-**Implementation status.** Phases 0 (configuration), 1 (game domain) and 2
-(transport and handshake) are implemented; the names in `§9`–`§11` are real and
+**Implementation status.** Configuration, game domain, transport and
+cryptography are implemented; the names in `§9`–`§12` are real and
 runnable. Everything else remains a specification for the phase that will
 implement it.
 
@@ -364,3 +364,40 @@ pass.
 11. Result agreement ⇒ both sides email their own `result_<game_id>.json`.
     Confirm both arrive with the JSON attached.
 12. Commit all four artefacts under `matches/<game_id>/`.
+
+---
+
+## 12. Implemented — cryptographic turn and audit chain
+
+591 tests under `tests/crypto/`, `tests/audit/` and `tests/peer/test_crypto_turn.py`.
+
+| Requirement | Test | Class |
+|---|---|---|
+| **E-17** commitment is lowercase-hex SHA-256, deterministic, pinned fixture | `test_sealed_and_commitment.py::test_commitment_is_lowercase_hex_sha256`, `::test_commitment_is_deterministic`, `::test_known_digest_fixture` | `AUTO` |
+| **E-17** commitment binds game, sub-game, turn, role, action, hint, intent, nonce | `::test_changing_any_sealed_field_changes_the_commitment` (×9), `::test_commitment_binds_game_turn_role_and_action` | `AUTO` |
+| Action not recoverable from the digest | `::test_action_is_not_recoverable_from_the_commitment` | `AUTO` |
+| Key order irrelevant; single canonical helper | `::test_source_key_order_does_not_change_the_commitment`, `::test_commitment_uses_the_single_canonical_helper` | `AUTO` |
+| Sealed schema closed; no timestamp, no global state | `::test_sealed_key_set_is_closed_and_complete`, `::test_sealed_record_carries_no_timestamp`, `::test_sealed_record_carries_no_global_state`, `::test_state_field_is_a_hash_not_a_position` | `AUTO` |
+| Sealed schema rejects unknown/missing/mistyped fields | `::test_unknown_sealed_field_is_rejected`, `::test_missing_sealed_field_is_rejected` (×10), `::test_invalid_sealed_values_are_rejected` (×10) | `AUTO` |
+| **E-18** nonce from `secrets`, 128-bit lowercase hex, distinct | `::test_nonce_uses_secrets_not_random`, `::test_nonce_format_is_lowercase_hex_of_fixed_length`, `::test_nonces_are_distinct_across_many_samples` | `AUTO` |
+| **E-18** nonce reuse refused | `::test_guard_never_issues_the_same_nonce_twice`, `test_coordinator.py::test_a_nonce_is_never_reused_across_turns` | `AUTO` |
+| **E-18** nonce absent from commit and from per-turn reveal | `test_coordinator.py::test_reveal_payload_never_contains_the_nonce`, `::test_local_nonce_never_leaves_the_coordinator_before_final_reveal` | `AUTO` |
+| **E-18** reveal message schema has no nonce field | `test_crypto_turn.py::test_reveal_payload_schema_has_no_nonce_field` | `AUTO` |
+| Commit payload leaks nothing about the move | `test_coordinator.py::test_commit_payload_contains_only_the_digest`; `test_crypto_turn.py::test_commit_payload_schema_rejects_an_action_field` (×5) | `AUTO` |
+| Reveal forbidden before both commitments | `test_coordinator.py::test_reveal_is_forbidden_before_the_opponent_commits`; `test_crypto_turn.py::test_neither_peer_reveals_before_both_have_committed` | `AUTO` |
+| Reveal permitted once both commitments exist | `test_coordinator.py::test_reveal_is_allowed_once_both_commitments_exist` | `AUTO` |
+| Reveal with no prior commitment rejected | `test_coordinator.py::test_reveal_without_a_prior_opponent_commit_is_rejected` | `AUTO` |
+| Duplicate commit/reveal idempotent; conflicts rejected | `test_coordinator.py::test_exact_duplicate_commit_is_idempotent`, `::test_conflicting_commit_is_rejected`, `::test_exact_duplicate_reveal_is_idempotent`, `::test_conflicting_reveal_is_rejected` | `AUTO` |
+| Stale / future turn, wrong game / role / sub-game rejected | `test_coordinator.py::test_reveal_for_a_stale_turn_is_rejected`, `::test_reveal_for_a_future_turn_is_rejected`, `::test_reveal_claiming_the_wrong_game_is_rejected`, `::test_reveal_claiming_the_wrong_role_is_rejected`, `::test_reveal_claiming_the_wrong_sub_game_is_rejected` | `AUTO` |
+| Commit/reveal must carry a turn number | `test_crypto_turn.py::test_commit_without_a_turn_number_is_rejected` | `AUTO` |
+| **E-19** tampered action / nonce / hint / intent detected at audit | `test_coordinator.py::test_tampered_action_is_detected_at_audit`, `::test_tampered_nonce_is_detected_at_audit`, `::test_tampered_hint_is_detected_at_audit`, `::test_final_reveal_disagreeing_with_the_turn_reveal_is_detected` | `AUTO` |
+| **E-36** clean match verifies both directions | `test_coordinator.py::test_a_clean_match_verifies`; `test_crypto_turn.py::test_final_reveal_verifies_a_clean_match` | `AUTO` |
+| Abandoned turn discards the nonce and cannot resume | `test_coordinator.py::test_abandoning_a_turn_does_not_expose_the_nonce`, `::test_abandoned_turn_cannot_resume_without_a_fresh_seal` | `AUTO` |
+| Two peers complete a full turn; mandatory state order | `test_crypto_turn.py::test_two_peers_complete_a_cryptographic_turn`, `::test_state_progression_is_the_mandatory_order`, `::test_several_turns_run_in_sequence` | `AUTO` |
+| Turn fails cleanly with no reveal when opponent never commits | `test_crypto_turn.py::test_turn_fails_cleanly_when_the_opponent_never_commits`, `::test_abandoned_turn_does_not_expose_the_nonce` | `AUTO` |
+| **E-20** audit chain: genesis, links, deterministic canonical hashing | `test_audit_chain.py::test_first_record_follows_the_explicit_genesis_hash`, `::test_each_record_chains_to_its_predecessor`, `::test_hash_excludes_its_own_field`, `::test_hashing_is_deterministic_and_canonical` | `AUTO` |
+| **E-20** modification / deletion / insertion / reordering / duplicate id / malformed line detected | `test_audit_chain.py::test_modified_payload_is_detected`, `::test_modified_timestamp_is_detected`, `::test_modified_turn_number_is_detected`, `::test_deleted_middle_record_is_detected`, `::test_inserted_record_is_detected`, `::test_reordered_records_are_detected`, `::test_duplicate_event_id_is_detected_on_read`, `::test_malformed_line_is_detected` | `AUTO` |
+| Append-only; first failure reported | `test_audit_chain.py::test_log_is_append_only`, `::test_verifier_reports_the_first_failure_only` | `AUTO` |
+| **E-18** log privacy: no nonce before final reveal, at any depth | `test_audit_chain.py::test_a_nonce_cannot_be_logged_before_the_final_reveal`, `::test_a_nonce_nested_deep_is_still_refused`, `::test_the_final_reveal_may_carry_nonces`, `::test_pre_reveal_log_contains_no_action_or_nonce` | `AUTO` |
+| Real-turn audit log verifies and holds no nonce | `test_crypto_turn.py::test_audit_log_records_the_turn_and_verifies`, `::test_audit_log_holds_no_nonce_before_the_final_reveal`, `::test_commit_record_carries_only_the_commitment` | `AUTO` |
+| Two real processes: valid turn, tampering, audit tamper detection | `scripts` demonstrations, recorded in the Phase 3 report | `MANUAL` |

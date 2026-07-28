@@ -16,6 +16,7 @@ import signal
 import sys
 from pathlib import Path
 
+from police_thief.audit.writer import AuditLog
 from police_thief.config.exceptions import ConfigError
 from police_thief.config.loader import load_private_config, load_shared_config
 from police_thief.peer.client import PeerClient
@@ -62,6 +63,21 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="stay running after READY (until Ctrl+C) instead of exiting",
     )
+    parser.add_argument(
+        "--turns",
+        type=int,
+        default=0,
+        help="play N cryptographic commit-reveal turns after READY",
+    )
+    parser.add_argument(
+        "--tamper",
+        choices=["action", "nonce"],
+        default=None,
+        help=(
+            "corrupt our own final reveal, to demonstrate that the opponent "
+            "detects it (test/demo only)"
+        ),
+    )
     return parser
 
 
@@ -105,6 +121,12 @@ async def run_peer(args: argparse.Namespace) -> int:
         events=events,
     )
 
+    audit = AuditLog(
+        path=Path(args.log_dir) / f"audit_{role.value}_{args.game_id}.jsonl",
+        game_id=args.game_id,
+        role=role.value,
+    )
+
     orchestrator = PeerOrchestrator(
         shared=shared,
         private=private,
@@ -112,6 +134,7 @@ async def run_peer(args: argparse.Namespace) -> int:
         client=client,
         events=events,
         clock=clock,
+        audit=audit,
     )
 
     server = PeerServer(
@@ -169,6 +192,9 @@ async def run_peer(args: argparse.Namespace) -> int:
                 )
                 exit_code = EXIT_HANDSHAKE_FAILED
 
+        if exit_code == EXIT_OK and args.turns:
+            exit_code = await _play_turns(orchestrator, args)
+
         if args.hold and exit_code == EXIT_OK:
             print("  holding; Ctrl+C to stop")
             await stop.wait()
@@ -180,6 +206,80 @@ async def run_peer(args: argparse.Namespace) -> int:
         print(f"  shutdown       {orchestrator.machine.state.value}")
 
     return exit_code
+
+
+async def _play_turns(orchestrator, args) -> int:
+    """Play N cryptographic turns, then exchange final reveals and audit.
+
+    The action comes from a trivial deterministic policy -- real strategy is a
+    later phase. What is being demonstrated is the protocol, not the play.
+    """
+    from police_thief.audit.verifier import verify_chain_file
+    from police_thief.crypto.exceptions import CryptoError
+    from police_thief.sim.policies import first_legal_move
+
+    try:
+        for turn in range(1, args.turns + 1):
+            action = first_legal_move(orchestrator.state, orchestrator.shared)
+            commitment = None
+            opponent_action = await orchestrator.play_turn(
+                turn, action, hint="moving along", intent="truth"
+            )
+            crypto_turn = orchestrator.crypto.completed_turns[turn]
+            commitment = crypto_turn.local_commitment
+            print(
+                f"  turn {turn:<3}       commit {commitment[:16]}… "
+                f"| opponent revealed {opponent_action}"
+            )
+    except CryptoError as exc:
+        print(f"  turn           FAILED: {exc}", file=sys.stderr)
+        return EXIT_HANDSHAKE_FAILED
+
+    if args.tamper:
+        _corrupt_final_reveal(orchestrator, args.tamper)
+        print(f"  TAMPERING      deliberately corrupted our {args.tamper}")
+
+    # The audit is mutual (E-36): send ours, and stay until we have verified
+    # theirs. Leaving early would let one side go unaudited.
+    try:
+        sending = asyncio.create_task(orchestrator.send_final_reveal())
+        received = await orchestrator._await_condition(
+            lambda: orchestrator.opponent_audit_received
+        )
+        verified = await sending
+        print(f"  final reveal   opponent verified {verified} turn(s)")
+        print(
+            f"  mutual audit   {'both directions verified' if received else 'INCOMPLETE'}"
+        )
+        if not received:
+            return EXIT_HANDSHAKE_FAILED
+    except Exception as exc:
+        print(f"  final reveal   REJECTED: {exc}", file=sys.stderr)
+        return EXIT_HANDSHAKE_FAILED
+
+    if orchestrator.audit is not None:
+        verdict = verify_chain_file(orchestrator.audit.path)
+        print(f"  audit chain    {verdict.describe()}")
+        if not verdict:
+            return EXIT_HANDSHAKE_FAILED
+
+    return EXIT_OK
+
+
+def _corrupt_final_reveal(orchestrator, what: str) -> None:
+    """Demonstration only: falsify our own sealed record after committing."""
+    import dataclasses
+
+    from police_thief.domain.actions import Move
+    from police_thief.domain.enums import Direction
+
+    trail = orchestrator.crypto.audit_trail
+    if not trail:
+        return
+    if what == "action":
+        trail[0] = dataclasses.replace(trail[0], action=Move(Direction.W))
+    else:
+        trail[0] = dataclasses.replace(trail[0], nonce="c" * 32)
 
 
 def main(argv: list[str] | None = None) -> int:
