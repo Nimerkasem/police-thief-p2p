@@ -13,9 +13,11 @@ runs, audits and replays correctly when both peers share one process. The same
 game between two real OS processes stalls at turn 6. That single fault
 (**Q-20**) is the whole of the remaining blocker and the reason for this handoff.
 
-- **Latest stable commit:** `e10477cb73c90d44cdcd7de04d4c158a959df842`
-  — *fix(transport): per-channel worker-owned sessions; server stall still open*
-- **Tag:** `pre-q20-handoff` points at that commit.
+- **Latest stable code commit:** `e10477cb73c90d44cdcd7de04d4c158a959df842`
+  — *fix(transport): per-channel worker-owned sessions; server stall still open*.
+  The only commit after it is this document; no application code follows it.
+- **Tag:** `pre-q20-handoff`, annotated, on the tip of `main` — so checking out
+  the tag gives you the code *and* this file.
 - **Tests:** 1468 passing.
 - Nothing in the tree is half-finished. The stall is a runtime fault, not
   unfinished code.
